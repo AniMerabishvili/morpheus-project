@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
+supabase
+google-generativeai
+openai-whisper
+sentence-transformers
+python-multipart
+torch --index-url https://download.pytorch.org/whl/cpu
