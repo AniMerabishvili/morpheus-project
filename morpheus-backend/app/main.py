@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings  # noqa: F401 — ensures env vars are validated on startup
+from app.routers import dreams
 
 app = FastAPI(
     title="Morpheus API",
@@ -16,6 +17,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(dreams.router)
 
 
 @app.get("/health")
