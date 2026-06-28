@@ -16,17 +16,17 @@ router = APIRouter(prefix="/v1/dreams", tags=["dreams"])
 
 
 def save_dream(
-    english_text: str,
+    processed_text: str,
     entities: dict,
 ) -> str:
     """Persist a processed dream to Supabase and return its UUID.
 
     Steps:
-      1. Generate 384-dim embedding from the raw English transcription.
+      1. Generate 384-dim embedding from the anonymized English transcription.
       2. Insert a row into `dreams` — returns the new UUID.
       3. For each symbol: upsert into `keywords`, then link via `dream_keywords`.
     """
-    embedding = generate_embedding(english_text)
+    embedding = generate_embedding(processed_text)
 
     # 1. Insert the dream row.
     dream_row = (
@@ -35,8 +35,8 @@ def save_dream(
             {
                 "user_id": None,
                 "title": entities.get("title", "Untitled Dream"),
-                "raw_text": english_text,
-                "analysis": "",
+                "raw_text": processed_text,
+                "analysis": entities.get("summary", ""),
                 "embedding": embedding,
             }
         )
@@ -76,7 +76,7 @@ async def process_dream(audio: UploadFile = File(...)) -> JSONResponse:
     Returns:
         dream_id      — UUID of the saved dream in Supabase
         title         — short evocative dream title (max 6 words)
-        transcription — raw English translation from Whisper
+        transcription — anonymized English translation from Whisper
         symbols       — list of key Jungian symbols
         emotions      — list of dominant emotions
         status        — "processing"
@@ -100,20 +100,20 @@ async def process_dream(audio: UploadFile = File(...)) -> JSONResponse:
         english_text = transcription_result["english_text"]
 
         # 2. Anonymize PII before sending to the external LLM
-        anonymized = anonymize_text(english_text)
+        anonymized_text = anonymize_text(english_text)
 
         # 3. Extract Jungian entities via Gemini (retries on 503 automatically)
-        entities = extract_entities(anonymized)
+        entities = extract_entities(anonymized_text)
 
         # 4. Embed + save to Supabase
-        dream_id = save_dream(english_text, entities)
+        dream_id = save_dream(anonymized_text, entities)
 
         return JSONResponse(
             status_code=200,
             content={
                 "dream_id": dream_id,
                 "title": entities.get("title", ""),
-                "transcription": english_text,
+                "transcription": anonymized_text,
                 "symbols": entities.get("symbols", []),
                 "emotions": entities.get("emotions", []),
                 "status": "processing",
