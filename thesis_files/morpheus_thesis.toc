@@ -1,7 +1,7 @@
 \selectlanguage *{english}
-\contentsline {chapter}{Acknowledgements}{i}{chapter*.1}%
-\contentsline {chapter}{Abstract}{ii}{chapter*.2}%
-\contentsline {chapter}{\textgeorgian {ანოტაცია}}{iii}{chapter*.3}%
+\contentsline {chapter}{Acknowledgements}{ii}{chapter*.2}%
+\contentsline {chapter}{Abstract}{iii}{chapter*.3}%
+\contentsline {chapter}{\textgeorgian {ანოტაცია}}{iv}{chapter*.4}%
 \bgroup 
 \selectlanguage *{georgian}
 \egroup 

@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ from sentence_transformers import SentenceTransformer
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import whisper
 
+from app.database import supabase
 from app.config import settings
 
 # ---------------------------------------------------------------------------
@@ -35,7 +37,25 @@ def _get_whisper_model():
 # Gemini client
 # ---------------------------------------------------------------------------
 _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-_GEMINI_MODEL = settings.GEMINI_MODEL
+_GEMINI_MODEL = "gemini-3.5-flash"
+
+
+class _GeminiModel:
+    """Small adapter exposing generate_content for the configured Gemini model."""
+
+    def generate_content(
+        self,
+        contents: str,
+        config: Optional[types.GenerateContentConfig] = None,
+    ):
+        return _gemini_client.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
+
+
+gemini_model = _GeminiModel()
 
 # ---------------------------------------------------------------------------
 # OpenAI client (disabled)
@@ -49,15 +69,12 @@ _GEMINI_MODEL = settings.GEMINI_MODEL
 _nlp = spacy.load("en_core_web_sm")
 
 # ---------------------------------------------------------------------------
-# Sentence-transformers — loaded lazily; 384-dim embeddings match the Supabase schema.
+# Sentence-transformers — 384-dim embeddings match the Supabase schema.
 # ---------------------------------------------------------------------------
-_embedder = None
+_embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def _get_embedder():
-    global _embedder
-    if _embedder is None:
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder
 
 
@@ -98,7 +115,7 @@ def transcribe_audio(audio_path: str) -> dict:
     Returns:
         {"english_text": str}
     """
-    wav_path: str | None = None
+    wav_path: Optional[str] = None
     try:
         wav_path = _convert_to_wav(audio_path)
         result = _get_whisper_model().transcribe(wav_path, task="translate")
@@ -176,8 +193,50 @@ def generate_embedding(text: str) -> list[float]:
     return _get_embedder().encode(text).tolist()
 
 
+def get_rag_context(dream_text: str) -> str:
+    """Retrieve the most relevant knowledge_base chunks for a dream.
+
+    Uses the same all-MiniLM-L6-v2 384-dimensional embedding model as
+    book ingestion, which keeps pgvector cosine similarity meaningful.
+    """
+    query_embedding = generate_embedding(dream_text)
+    response = (
+        supabase.rpc(
+            "match_documents",
+            {
+                "query_embedding": query_embedding,
+                "match_threshold": 0.75,
+                "match_count": 5,
+            },
+        )
+        .execute()
+    )
+
+    matches = response.data or []
+    if not matches:
+        return "No sufficiently similar academic context was retrieved."
+
+    context_parts: list[str] = []
+    for index, match in enumerate(matches, start=1):
+        book_title = match.get("book_title") or "Unknown source"
+        content = " ".join(str(match.get("content") or "").split())
+        similarity = match.get("similarity")
+
+        if similarity is None:
+            heading = f"[{index}] Source: {book_title}"
+        else:
+            heading = (
+                f"[{index}] Source: {book_title} "
+                f"(similarity: {float(similarity):.3f})"
+            )
+
+        context_parts.append(f"{heading}\n{content}")
+
+    return "\n\n".join(context_parts)
+
+
 # ---------------------------------------------------------------------------
-# Entity extraction — OLD: Gemini / NEW: OpenAI
+# Entity extraction — Gemini JSON mode
 # ---------------------------------------------------------------------------
 
 class DreamEntities(BaseModel):
@@ -382,3 +441,70 @@ def extract_entities(text: str) -> dict:
 
     logger.error("All Gemini models failed — returning local fallback.")
     return _local_entity_fallback(text)
+
+
+@retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=3, max=15))
+def _call_gemini_analysis(prompt: str) -> str:
+    """Call Gemini for warm language-matched analysis text."""
+    try:
+        response = gemini_model.generate_content(
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.45,
+            ),
+        )
+        return (response.text or "").strip()
+    except Exception as e:
+        logger.warning(
+            "_call_gemini_analysis [%s] error: %s — %s",
+            _GEMINI_MODEL,
+            type(e).__name__,
+            e,
+        )
+        raise
+
+
+def generate_analysis(dream_text: str, entities: dict, rag_context: str) -> str:
+    """Generate a language-matched Jungian dream analysis grounded in RAG context."""
+    symbols = entities.get("symbols", [])
+    emotions = entities.get("emotions", [])
+    summary = entities.get("summary", "")
+    prompt = f"""\
+You are a compassionate Jungian dream analyst.
+
+First detect whether the Dream text is written in English or Georgian.
+Write the analysis in the exact same language as the Dream text:
+- If the Dream text is Georgian, write in Georgian (ქართული).
+- If the Dream text is English, write in English.
+
+The analysis must be 150-200 words in either language. Use warm,
+non-diagnostic, empathetic language. Never diagnose, never make clinical
+claims, and never imply that the dream proves a mental health condition.
+
+Reference specific symbols from the dream. Connect those symbols to Jungian
+concepts found in the academic context, such as archetype, shadow, anima,
+animus, self, individuation, myth, transformation, projection, or the
+unconscious, but only when the retrieved context supports the connection.
+
+Dream:
+{dream_text}
+
+Extracted entities:
+{json.dumps({"symbols": symbols, "emotions": emotions, "summary": summary}, ensure_ascii=False)}
+
+Academic RAG context:
+{rag_context}
+
+Return only the analysis text in the same language as the Dream text. Do not
+use markdown.
+"""
+    try:
+        analysis = _call_gemini_analysis(prompt)
+    except RetryError as e:
+        logger.error("Gemini analysis exhausted retries: %s", e)
+        raise
+
+    if not analysis:
+        raise ValueError("Gemini returned an empty analysis.")
+
+    return analysis
