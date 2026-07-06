@@ -1,6 +1,11 @@
 from typing import Optional
 
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
 from app.database import supabase
+
+_embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def normalize_keyword_name(name: Optional[str]) -> str:
@@ -66,6 +71,7 @@ def build_graph_data(user_id: str) -> dict:
 
     keyword_node_ids_by_row_id = {}
     keyword_node_ids = set()
+    keyword_node_names = []
     for keyword in keywords:
         keyword_id = keyword.get("id")
         keyword_node_id = normalize_keyword_name(keyword.get("name"))
@@ -77,6 +83,7 @@ def build_graph_data(user_id: str) -> dict:
             continue
 
         keyword_node_ids.add(keyword_node_id)
+        keyword_node_names.append(keyword_node_id)
         nodes.append(
             {
                 "id": keyword_node_id,
@@ -109,8 +116,29 @@ def build_graph_data(user_id: str) -> dict:
             {
                 "source": source,
                 "target": target,
+                "type": "dream_keyword",
             }
         )
+
+    if len(keyword_node_names) >= 2:
+        embeddings = _embedder.encode(keyword_node_names)
+        similarity_matrix = cosine_similarity(embeddings)
+
+        for source_index, source_keyword in enumerate(keyword_node_names):
+            for target_index in range(source_index + 1, len(keyword_node_names)):
+                target_keyword = keyword_node_names[target_index]
+                if source_keyword == target_keyword:
+                    continue
+                if similarity_matrix[source_index][target_index] < 0.65:
+                    continue
+
+                links.append(
+                    {
+                        "source": source_keyword,
+                        "target": target_keyword,
+                        "type": "similar",
+                    }
+                )
 
     return {
         "nodes": nodes,
