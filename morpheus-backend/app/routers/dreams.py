@@ -2,10 +2,11 @@ import os
 import tempfile
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.auth import get_current_user
 from app.database import supabase
 from app.services.ai_service import (
     anonymize_text,
@@ -16,16 +17,47 @@ from app.services.ai_service import (
     transcribe_audio,
 )
 
-router = APIRouter(prefix="/v1/dreams", tags=["dreams"])
+router = APIRouter(prefix="/dreams", tags=["dreams"])
 
 
 class TextDreamRequest(BaseModel):
     dream_text: str
 
 
+@router.get("")
+def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
+    """Return saved dreams for the dreams list view."""
+    response = (
+        supabase.table("dreams")
+        .select("id,title,analysis,created_at")
+        .eq("user_id", current_user.id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+@router.get("/{dream_id}")
+def get_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
+    """Return a single dream only if it belongs to the authenticated user."""
+    response = (
+        supabase.table("dreams")
+        .select("id,title,raw_text,analysis,created_at,user_id")
+        .eq("id", dream_id)
+        .eq("user_id", current_user.id)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Dream not found.")
+    return rows[0]
+
+
 def save_dream(
     processed_text: str,
     entities: dict,
+    user_id: str,
 ) -> str:
     """Persist a processed dream to Supabase and return its UUID.
 
@@ -41,7 +73,7 @@ def save_dream(
         supabase.table("dreams")
         .insert(
             {
-                "user_id": None,
+                "user_id": user_id,
                 "title": entities.get("title", "Untitled Dream"),
                 "raw_text": processed_text,
                 "analysis": entities.get("summary", ""),
@@ -84,7 +116,7 @@ def update_dream_analysis(dream_id: str, analysis: str) -> None:
     )
 
 
-def process_text_pipeline(dream_text: str) -> dict:
+def process_text_pipeline(dream_text: str, user_id: str) -> dict:
     """Run the shared non-audio dream pipeline for English or Georgian text."""
     if not dream_text.strip():
         raise HTTPException(status_code=400, detail="dream_text cannot be empty.")
@@ -96,7 +128,7 @@ def process_text_pipeline(dream_text: str) -> dict:
     entities = extract_entities(anonymized_text)
 
     # 3. Embed + save to Supabase
-    dream_id = save_dream(anonymized_text, entities)
+    dream_id = save_dream(anonymized_text, entities, user_id)
 
     # 4. Retrieve RAG context and generate language-matched analysis
     rag_context = get_rag_context(anonymized_text)
@@ -117,7 +149,10 @@ def process_text_pipeline(dream_text: str) -> dict:
 
 
 @router.post("/process")
-async def process_dream(audio: UploadFile = File(...)) -> JSONResponse:
+async def process_dream(
+    audio: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+) -> JSONResponse:
     """Full dream-processing pipeline:
     upload audio → transcribe → anonymize → extract entities → RAG analysis → save to Supabase.
 
@@ -152,7 +187,7 @@ async def process_dream(audio: UploadFile = File(...)) -> JSONResponse:
 
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(english_text),
+            content=process_text_pipeline(english_text, current_user.id),
         )
 
     except HTTPException:
@@ -168,12 +203,15 @@ async def process_dream(audio: UploadFile = File(...)) -> JSONResponse:
 
 
 @router.post("/process-text")
-async def process_dream_text(payload: TextDreamRequest) -> JSONResponse:
+async def process_dream_text(
+    payload: TextDreamRequest,
+    current_user=Depends(get_current_user),
+) -> JSONResponse:
     """Process an already-transcribed English or Georgian dream text."""
     try:
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(payload.dream_text),
+            content=process_text_pipeline(payload.dream_text, current_user.id),
         )
     except HTTPException:
         raise

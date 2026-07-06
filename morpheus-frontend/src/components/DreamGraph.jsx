@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { apiFetch } from '../lib/api.js'
+
 function getNodeId(value) {
   if (!value) {
     return ''
@@ -81,8 +83,8 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
 
       try {
         const [graphResponse, dreamsResponse] = await Promise.all([
-          fetch('/v1/graph/data', { signal: controller.signal }),
-          fetch('/v1/dreams', { signal: controller.signal }),
+          apiFetch('/v1/graph/data', { signal: controller.signal }),
+          apiFetch('/v1/dreams', { signal: controller.signal }),
         ])
 
         const graphPayload = await graphResponse.json()

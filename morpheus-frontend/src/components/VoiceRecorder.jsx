@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { apiFetch } from '../lib/api.js'
+
 const GOLD = '#FFDE6E'
 const GOLD_PALE = '#E6DFA9'
 const GOLD_SHADOW = '#8A7129'
@@ -275,7 +277,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
     formData.append('audio', audioBlob, `dream.${extensionRef.current}`)
 
     try {
-      const response = await fetch('/v1/dreams/process', {
+      const response = await apiFetch('/v1/dreams/process', {
         method: 'POST',
         body: formData,
       })
@@ -298,7 +300,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
     setErrorMessage('')
 
     try {
-      const response = await fetch('/v1/dreams/process-text', {
+      const response = await apiFetch('/v1/dreams/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dream_text: dreamText.trim() }),

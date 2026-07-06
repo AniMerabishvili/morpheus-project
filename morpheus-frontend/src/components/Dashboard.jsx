@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 
+import { apiFetch } from '../lib/api.js'
+
 function truncateAnalysis(text) {
   const cleanText = String(text || '').trim()
   if (cleanText.length <= 100) {
@@ -62,7 +64,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
       setErrorMessage('')
 
       try {
-        const response = await fetch('/v1/dreams', {
+        const response = await apiFetch('/v1/dreams', {
           signal: controller.signal,
         })
         const data = await response.json()

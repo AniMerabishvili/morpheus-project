@@ -71,10 +71,13 @@ _nlp = spacy.load("en_core_web_sm")
 # ---------------------------------------------------------------------------
 # Sentence-transformers — 384-dim embeddings match the Supabase schema.
 # ---------------------------------------------------------------------------
-_embedder = SentenceTransformer("all-MiniLM-L6-v2")
+_embedder = None
 
 
 def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder
 
 
@@ -476,6 +479,17 @@ First detect whether the Dream text is written in English or Georgian.
 Write the analysis in the exact same language as the Dream text:
 - If the Dream text is Georgian, write in Georgian (ქართული).
 - If the Dream text is English, write in English.
+
+CRITICAL LANGUAGE RULE:
+You must write the entire analysis in Georgian using the INFORMAL singular
+address form (შენ-form). Never use the formal plural/polite form (თქვენ-form).
+
+Correct:   შენი სიზმარი, შენ გრძნობ, გაქვს, გიდგას, შეგიძლია
+Incorrect: თქვენი სიზმარი, თქვენ გრძნობთ, გაქვთ, გიდგათ, შეგიძლიათ
+
+The tone must feel like a warm, personal conversation — like a trusted friend
+who also happens to understand Jungian psychology. Not clinical, not distant,
+not formal. Write as if speaking directly to one person you know well.
 
 The analysis must be 150-200 words in either language. Use warm,
 non-diagnostic, empathetic language. Never diagnose, never make clinical

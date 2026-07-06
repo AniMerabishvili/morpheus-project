@@ -4,6 +4,8 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 're
 import Dashboard from './components/Dashboard.jsx'
 import MainGraph from './components/MainGraph.jsx'
 import VoiceRecorder from './components/VoiceRecorder.jsx'
+import { useAuth } from './hooks/useAuth.js'
+import AuthPage from './pages/AuthPage.jsx'
 
 function App() {
   return (
@@ -43,6 +45,7 @@ class ErrorBoundary extends Component {
 }
 
 function AppShell() {
+  const { loading, session, signOut } = useAuth()
   const [isRecorderOpen, setIsRecorderOpen] = useState(false)
   const [showToast, setShowToast] = useState(false)
   const [journalRefreshKey, setJournalRefreshKey] = useState(0)
@@ -53,6 +56,7 @@ function AppShell() {
     links: 0,
   })
   const location = useLocation()
+  const isAuthRoute = location.pathname === '/auth'
 
   useEffect(() => {
     setIsRecorderOpen(false)
@@ -64,9 +68,31 @@ function AppShell() {
     window.setTimeout(() => setShowToast(false), 3000)
   }
 
+  async function handleSignOut() {
+    await signOut()
+    window.location.assign('/auth')
+  }
+
+  if (loading) {
+    return <AuthLoadingScreen />
+  }
+
+  if (!session) {
+    return (
+      <Routes>
+        <Route path="/auth" element={<AuthPage />} />
+        <Route path="*" element={<Navigate to="/auth" replace />} />
+      </Routes>
+    )
+  }
+
+  if (isAuthRoute) {
+    return <Navigate to="/" replace />
+  }
+
   return (
     <>
-      <AppNavigation onRecordDream={() => setIsRecorderOpen(true)} />
+      <AppNavigation onRecordDream={() => setIsRecorderOpen(true)} onSignOut={handleSignOut} />
 
       <div className="min-h-screen bg-[#0f0f0f] transition-opacity duration-300">
         <Routes>
@@ -83,6 +109,7 @@ function AppShell() {
             path="/graph"
             element={<MainGraph stats={graphStats} onStatsChange={setGraphStats} />}
           />
+          <Route path="/auth" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
@@ -142,6 +169,18 @@ function AppShell() {
   )
 }
 
+function AuthLoadingScreen() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#0f0f0f]">
+      <div
+        className="h-12 w-12 animate-spin rounded-full border-2 border-[#1f1f1f] border-t-[#FFDE6E]"
+        aria-label="Loading session"
+        role="status"
+      />
+    </main>
+  )
+}
+
 function AppFooter() {
   return (
     <footer className="bg-[#0f0f0f] px-4 pb-24 pt-6 text-center text-xs font-bold text-[#8A7129] md:pb-8">
@@ -150,7 +189,7 @@ function AppFooter() {
   )
 }
 
-function AppNavigation({ onRecordDream }) {
+function AppNavigation({ onRecordDream, onSignOut }) {
   const linkClass = ({ isActive }) =>
     `border-b-2 px-1 py-1 text-sm font-bold transition hover:text-[#FFDE6E] ${
       isActive
@@ -186,17 +225,31 @@ function AppNavigation({ onRecordDream }) {
             <NavLink to="/graph" className={linkClass}>
               Graph
             </NavLink>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="border-b-2 border-transparent px-1 py-1 text-sm font-bold text-[#E6DFA9] transition hover:text-[#FFDE6E] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+            >
+              Sign Out
+            </button>
           </div>
         </div>
       </nav>
 
-      <nav className="fixed bottom-0 left-0 z-40 grid w-full grid-cols-2 border-t border-[#1f1f1f] bg-[#0f0f0f] md:hidden">
+      <nav className="fixed bottom-0 left-0 z-40 grid w-full grid-cols-3 border-t border-[#1f1f1f] bg-[#0f0f0f] md:hidden">
         <NavLink to="/" className={mobileLinkClass}>
           Journal
         </NavLink>
         <NavLink to="/graph" className={mobileLinkClass}>
           Graph
         </NavLink>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="flex flex-1 flex-col items-center justify-center border-t-2 border-transparent py-3 text-sm font-black text-[#E6DFA9] transition hover:text-[#FFDE6E] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+        >
+          Sign Out
+        </button>
       </nav>
     </>
   )
