@@ -9,6 +9,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 import spacy
+from names_dataset import NameDataset
 from google import genai
 from google.genai import types
 # from openai import OpenAI
@@ -67,6 +68,7 @@ gemini_model = _GeminiModel()
 # spaCy — for accurate PERSON entity detection (avoids mis-tagging place names).
 # ---------------------------------------------------------------------------
 _nlp = spacy.load("en_core_web_sm")
+_name_db = NameDataset()
 
 # ---------------------------------------------------------------------------
 # Sentence-transformers — 384-dim embeddings match the Supabase schema.
@@ -134,7 +136,7 @@ def transcribe_audio(audio_path: str) -> dict:
 # PII anonymization
 # ---------------------------------------------------------------------------
 
-# Compiled regex patterns for email, phone, and date replacement.
+# Compiled regex patterns for email, phone, date, and ID replacement.
 _RE_EMAIL = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 
 _RE_PHONE = re.compile(r"\b\+?[\d][\d\s\-().]{6,}[\d]\b")
@@ -154,33 +156,81 @@ _RE_DATE = re.compile(
     re.IGNORECASE,
 )
 
+# National/personal ID numbers: 7+ consecutive digits not already part of a
+# phone number or date (handled after those are replaced).
+_RE_ID = re.compile(r"\b\d{7,}\b")
+
+
+def _best_rank(data: dict, key: str) -> int:
+    """Return the lowest (best) rank for a name under the given key, or 99999 if absent."""
+    entry = data.get(key)
+    if not entry:
+        return 99999
+    ranks = [v for v in entry.get("rank", {}).values() if v is not None]
+    return min(ranks) if ranks else 99999
+
+
+def _is_surname(word: str) -> bool:
+    """Return True when the word is more likely a surname than a given name.
+
+    Uses the names_dataset rank scores: a lower rank means more common in that role.
+    If the word's best rank as a last name is lower than its best rank as a first
+    name, it is treated as a surname.  Unknown words (not in the dataset at all)
+    default to 'first name' so they are left untouched.
+
+    Examples:
+      "John"    → first_best=1,   last_best=7   → False  (keep)
+      "Smith"   → first_best=580, last_best=1   → True   (redact)
+      "Beridze" → first_best=755, last_best=1   → True   (redact)
+    """
+    result = _name_db.search(word)
+    first_best = _best_rank(result, "first_name")
+    last_best = _best_rank(result, "last_name")
+    return last_best < first_best
+
 
 def anonymize_text(text: str) -> str:
-    """Remove PII from transcribed dream text before sending to the LLM.
+    """Remove only strongly identifying PII from dream text before sending to the LLM.
 
-    Uses spaCy NER to replace only genuine PERSON entities — place names,
-    organisations, and other capitalised words are left untouched.
-
-    Replacements:
-      - Person names (spaCy PERSON)  → [PERSON]
+    Rules (no hardcoding):
+      - Relationship words (sister, mother, boyfriend, etc.) are kept — spaCy
+        does not tag common nouns as PERSON.
+      - "John"        (single-word, dataset says first name)  → kept
+      - "Smith"       (single-word, dataset says surname)      → [SURNAME]
+      - "John Smith"  (multi-word PERSON entity)                  → "John [SURNAME]"
       - Email addresses               → [EMAIL]
       - Phone numbers                 → [PHONE]
       - Specific dates                → [DATE]
+      - Personal/national ID numbers  → [ID]
     """
-    # spaCy PERSON replacement — iterate in reverse to preserve char offsets.
     doc = _nlp(text)
-    person_spans = [
-        (ent.start_char, ent.end_char)
-        for ent in doc.ents
-        if ent.label_ == "PERSON"
-    ]
-    for start, end in sorted(person_spans, reverse=True):
-        text = text[:start] + "[PERSON]" + text[end:]
+    replacements: list[tuple[int, int, str]] = []
+
+    for ent in doc.ents:
+        if ent.label_ != "PERSON":
+            continue
+        tokens = [t for t in ent]
+
+        if len(tokens) == 1:
+            # Single-word entity: redact only if the dataset says it is a surname.
+            token = tokens[0]
+            if _is_surname(token.text):
+                replacements.append((token.idx, token.idx + len(token.text), "[SURNAME]"))
+        else:
+            # Multi-word entity (e.g. "John Smith"): redact only the last token.
+            surname_token = tokens[-1]
+            replacements.append(
+                (surname_token.idx, surname_token.idx + len(surname_token.text), "[SURNAME]")
+            )
+
+    for start, end, placeholder in sorted(replacements, reverse=True):
+        text = text[:start] + placeholder + text[end:]
 
     # Regex-based replacements for the remaining PII types.
     text = _RE_EMAIL.sub("[EMAIL]", text)
     text = _RE_PHONE.sub("[PHONE]", text)
     text = _RE_DATE.sub("[DATE]", text)
+    text = _RE_ID.sub("[ID]", text)
     return text
 
 
@@ -238,12 +288,44 @@ def get_rag_context(dream_text: str) -> str:
     return "\n\n".join(context_parts)
 
 
+def get_user_history(user_id: str, limit: int = 5) -> str:
+    """Return a short digest of the user's most recent dream analyses for personalisation.
+
+    Fetches the last `limit` dreams (excluding the one just saved, because this is called
+    after the insert but before the final analysis is written back). Returns an empty string
+    when the user has no prior history so the caller can skip the personalisation block.
+    """
+    response = (
+        supabase.table("dreams")
+        .select("title,analysis,created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = response.data or []
+    if not rows:
+        return ""
+
+    parts: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        title = (row.get("title") or "Untitled").strip()
+        analysis = (row.get("analysis") or "").strip()
+        if not analysis:
+            continue
+        # Keep only the first ~60 words to stay within prompt budget.
+        short = " ".join(analysis.split()[:60])
+        parts.append(f"[{index}] {title}: {short}…")
+
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Entity extraction — Gemini JSON mode
 # ---------------------------------------------------------------------------
 
 class DreamEntities(BaseModel):
-    title: str = Field(description="Short evocative dream title, max 6 words.")
+    title: str = Field(description="Short evocative dream title, max 6 words, in the same language as the dream text.")
     symbols: list[str] = Field(description="Key Jungian symbols from the dream.")
     emotions: list[str] = Field(description="Dominant emotions in the dream.")
     summary: str = Field(description="One sentence summary of the dream.")
@@ -258,7 +340,7 @@ no markdown, no backticks, no explanation, no extra text.
 
 Required schema (all fields mandatory):
 {{
-  "title": "short evocative dream title (max 6 words)",
+  "title": "short evocative dream title (max 6 words, written in the SAME language as the Dream text — Georgian if the dream is in Georgian, English if the dream is in English)",
   "symbols": ["list", "of", "key", "symbols"],
   "emotions": ["list", "of", "dominant", "emotions"],
   "summary": "one sentence summary of the dream"
@@ -467,11 +549,23 @@ def _call_gemini_analysis(prompt: str) -> str:
         raise
 
 
-def generate_analysis(dream_text: str, entities: dict, rag_context: str) -> str:
-    """Generate a language-matched Jungian dream analysis grounded in RAG context."""
+def generate_analysis(dream_text: str, entities: dict, rag_context: str, user_history: str = "") -> str:
+    """Generate a language-matched Jungian dream analysis grounded in RAG context.
+
+    When `user_history` is provided the prompt instructs the model to use it as a
+    secondary personalisation layer on top of the RAG foundation — noting recurring
+    symbols, emotions, and growth across sessions — without letting personal history
+    override the academic psychological grounding.
+    """
     symbols = entities.get("symbols", [])
     emotions = entities.get("emotions", [])
     summary = entities.get("summary", "")
+    user_history_section = (
+        "\nUser's personal dream history (secondary layer, use this to personalise the response;"
+        "\nnote recurring symbols, themes, and emotional patterns across sessions; reference growth"
+        "\nor continuity when meaningful, but keep the academic RAG above as the primary foundation):"
+        f"\n{user_history}\n"
+    ) if user_history else ""
     prompt = f"""\
 You are a compassionate Jungian dream analyst.
 
@@ -487,13 +581,16 @@ address form (შენ-form). Never use the formal plural/polite form (თქ�
 Correct:   შენი სიზმარი, შენ გრძნობ, გაქვს, გიდგას, შეგიძლია
 Incorrect: თქვენი სიზმარი, თქვენ გრძნობთ, გაქვთ, გიდგათ, შეგიძლიათ
 
-The tone must feel like a warm, personal conversation — like a trusted friend
+The tone must feel like a warm, personal conversation, like a trusted friend
 who also happens to understand Jungian psychology. Not clinical, not distant,
 not formal. Write as if speaking directly to one person you know well.
 
 The analysis must be 150-200 words in either language. Use warm,
 non-diagnostic, empathetic language. Never diagnose, never make clinical
 claims, and never imply that the dream proves a mental health condition.
+
+Do not use long dashes (---, --, em dash, en dash) or any other special
+punctuation characters. Use only standard commas, periods, and question marks.
 
 Reference specific symbols from the dream. Connect those symbols to Jungian
 concepts found in the academic context, such as archetype, shadow, anima,
@@ -506,9 +603,9 @@ Dream:
 Extracted entities:
 {json.dumps({"symbols": symbols, "emotions": emotions, "summary": summary}, ensure_ascii=False)}
 
-Academic RAG context:
+Academic RAG context (primary foundation, always use this as the psychological basis):
 {rag_context}
-
+{user_history_section}
 Return only the analysis text in the same language as the Dream text. Do not
 use markdown.
 """

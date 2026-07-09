@@ -4,16 +4,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from postgrest.exceptions import APIError
 from pydantic import BaseModel
 
 from app.auth import get_current_user
-from app.database import supabase
+from app.database import get_user_supabase, supabase
 from app.services.ai_service import (
     anonymize_text,
     extract_entities,
     generate_analysis,
     generate_embedding,
     get_rag_context,
+    get_user_history,
     transcribe_audio,
 )
 
@@ -29,7 +31,7 @@ def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
     """Return saved dreams for the dreams list view."""
     response = (
         supabase.table("dreams")
-        .select("id,title,analysis,created_at")
+        .select("id,title,raw_text,analysis,created_at")
         .eq("user_id", current_user.id)
         .order("created_at", desc=True)
         .execute()
@@ -52,6 +54,49 @@ def get_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Dream not found.")
     return rows[0]
+
+
+@router.delete("/{dream_id}")
+def delete_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
+    """Delete a dream for the authenticated user.
+
+    The `dream_keywords` rows are removed by the database foreign key cascade.
+    This endpoint intentionally leaves the shared `keywords` table untouched.
+    """
+    response = (
+        supabase.table("dreams")
+        .select("id")
+        .eq("id", dream_id)
+        .eq("user_id", current_user.id)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Dream not found.")
+
+    user_supabase = get_user_supabase(current_user.access_token)
+    try:
+        (
+            user_supabase.table("dreams")
+            .delete()
+            .eq("id", dream_id)
+            .eq("user_id", current_user.id)
+            .execute()
+        )
+    except APIError as exc:
+        error = getattr(exc, "args", [{}])[0]
+        if isinstance(error, dict) and error.get("code") == "42501":
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Supabase delete permission is missing for the dreams table. "
+                    "Grant DELETE on public.dreams to the authenticated role."
+                ),
+            ) from exc
+        raise
+
+    return {"message": "Dream deleted successfully."}
 
 
 def save_dream(
@@ -130,9 +175,12 @@ def process_text_pipeline(dream_text: str, user_id: str) -> dict:
     # 3. Embed + save to Supabase
     dream_id = save_dream(anonymized_text, entities, user_id)
 
+    # 3b. Fetch user's prior dream history for personalised analysis
+    user_history = get_user_history(user_id)
+
     # 4. Retrieve RAG context and generate language-matched analysis
     rag_context = get_rag_context(anonymized_text)
-    analysis = generate_analysis(anonymized_text, entities, rag_context)
+    analysis = generate_analysis(anonymized_text, entities, rag_context, user_history)
 
     # 5. Update saved dream with final analysis
     update_dream_analysis(dream_id, analysis)

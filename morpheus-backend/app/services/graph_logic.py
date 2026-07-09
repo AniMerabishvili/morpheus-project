@@ -1,3 +1,5 @@
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Optional
 
 from sentence_transformers import SentenceTransformer
@@ -36,6 +38,16 @@ def build_graph_data(user_id: str) -> dict:
         .execute()
     )
     dream_keywords = links_response.data or []
+
+    # Count distinct dreams per keyword (keyed by DB keyword UUID).
+    _kw_dream_sets: dict[str, set] = {}
+    for row in dream_keywords:
+        kid = row.get("keyword_id")
+        did = row.get("dream_id")
+        if kid and did:
+            _kw_dream_sets.setdefault(kid, set()).add(did)
+    kw_dream_count_by_db_id: dict[str, int] = {k: len(v) for k, v in _kw_dream_sets.items()}
+
     keyword_ids = sorted(
         {
             row["keyword_id"]
@@ -90,6 +102,7 @@ def build_graph_data(user_id: str) -> dict:
                 "label": keyword_node_id,
                 "type": "keyword",
                 "color": "#8A7129",
+                "dream_count": kw_dream_count_by_db_id.get(keyword_id, 0),
             }
         )
 
@@ -139,6 +152,81 @@ def build_graph_data(user_id: str) -> dict:
                         "type": "similar",
                     }
                 )
+
+    # -----------------------------------------------------------------------
+    # Cluster-aware dream count & dominant node detection
+    # -----------------------------------------------------------------------
+    # Build adjacency from the similar links just created.
+    adj: dict[str, set] = defaultdict(set)
+    for link in links:
+        if link["type"] == "similar":
+            adj[link["source"]].add(link["target"])
+            adj[link["target"]].add(link["source"])
+
+    # Map keyword_node_id → set of dream_ids it is directly linked to.
+    node_dream_ids: dict[str, set] = {}
+    for row in dream_keywords:
+        did = row.get("dream_id")
+        kid = row.get("keyword_id")
+        if not did or not kid:
+            continue
+        node_id = keyword_node_ids_by_row_id.get(kid)
+        if not node_id:
+            continue
+        node_dream_ids.setdefault(node_id, set()).add(did)
+
+    # BFS over similarity adjacency to compute pooled dream count per cluster.
+    visited: set[str] = set()
+    cluster_dream_count: dict[str, int] = {}
+    for start in keyword_node_names:
+        if start in visited:
+            continue
+        cluster: list[str] = []
+        queue = [start]
+        while queue:
+            current = queue.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            cluster.append(current)
+            queue.extend(adj[current] - visited)
+        combined: set = set()
+        for member in cluster:
+            combined |= node_dream_ids.get(member, set())
+        count = len(combined)
+        for member in cluster:
+            cluster_dream_count[member] = count
+
+    # Determine account age from the earliest dream timestamp.
+    earliest: Optional[datetime] = None
+    for dream in dreams:
+        created = dream.get("created_at")
+        if not created:
+            continue
+        try:
+            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if earliest is None or dt < earliest:
+                earliest = dt
+        except ValueError:
+            pass
+
+    account_age_days = 0
+    if earliest:
+        account_age_days = (datetime.now(timezone.utc) - earliest).days
+
+    max_cluster_count = max(cluster_dream_count.values(), default=0)
+
+    # Patch cluster_dream_count and is_dominant onto every keyword node.
+    for node in nodes:
+        if node.get("type") != "keyword":
+            continue
+        cdc = cluster_dream_count.get(node["id"], node.get("dream_count", 0))
+        node["cluster_dream_count"] = cdc
+        node["is_dominant"] = bool(
+            account_age_days >= 90
+            and max_cluster_count > 0
+            and cdc == max_cluster_count
+        )
 
     return {
         "nodes": nodes,

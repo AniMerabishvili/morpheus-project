@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from fastapi import Header, HTTPException, status
 
-from app.database import supabase
+from app.database import supabase_auth
 
 
 # Run this SQL in Supabase SQL Editor before enabling authenticated dream access:
@@ -30,7 +30,7 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> Any
         raise_unauthorized()
 
     try:
-        response = supabase.auth.get_user(token)
+        response = supabase_auth.auth.get_user(token)
     except Exception as exc:
         raise_unauthorized(exc)
 
@@ -44,7 +44,11 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> Any
     if not user or not getattr(user, "id", None):
         raise_unauthorized()
 
-    return user
+    return SimpleNamespace(
+        id=user.id,
+        email=getattr(user, "email", None),
+        access_token=token,
+    )
 
 
 def raise_unauthorized(exc: Optional[Exception] = None) -> None:

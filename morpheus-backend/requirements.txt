@@ -11,5 +11,6 @@ en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_
 sentence-transformers
 python-multipart
 tenacity
+names-dataset
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
