@@ -1,11 +1,46 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg', 'favicon.ico'],
+      manifest: {
+        name: 'Morpheus Dream Analytics',
+        short_name: 'Morpheus',
+        description: 'Transform your dreams into insights',
+        start_url: '/',
+        display: 'standalone',
+        background_color: '#0f0f0f',
+        theme_color: '#FFDE6E',
+        icons: [
+          {
+            src: '/icons/morpheus192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: '/icons/morpheus512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: '/icons/morpheus512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable',
+          },
+        ],
+      },
+    }),
+  ],
   server: {
     allowedHosts: true,
     proxy: {
