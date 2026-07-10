@@ -1,8 +1,8 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-pydantic-settings
-supabase
-google-genai
-python-multipart
-tenacity
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.20.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.0.0,<3.0.0
+supabase>=2.0.0,<3.0.0
+google-genai>=1.0.0,<2.0.0
+python-multipart>=0.0.9
+tenacity>=8.0.0

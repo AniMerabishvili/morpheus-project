@@ -1,8 +1,19 @@
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+_log = logging.getLogger(__name__)
+
+_log.info("Loading config...")
 from app.config import settings
+_log.info("Config loaded. USE_LOCAL_MODELS=%s", settings.USE_LOCAL_MODELS)
+
+_log.info("Loading routers...")
 from app.routers import dreams, graph
+_log.info("Routers loaded.")
 
 app = FastAPI(
     title="Morpheus API",
