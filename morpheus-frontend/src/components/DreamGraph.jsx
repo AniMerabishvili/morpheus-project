@@ -4,7 +4,6 @@ import { apiFetch } from '../lib/api.js'
 
 const DEFAULT_DREAM_COLOR = '#FFDE6E'
 const DEFAULT_EMOTION_COLOR = '#95A5A6'
-const EMOTION_LAYER_OPACITY = 0.65
 
 const VIEW_MODES = [
   { id: 'keywords', label: 'Keywords' },
@@ -265,10 +264,10 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
               key={mode.id}
               type="button"
               onClick={() => setViewMode(mode.id)}
-              className={`text-xs font-bold text-[#E6DFA9] transition-opacity ${
+              className={`text-xs font-bold text-white transition-opacity ${
                 viewMode === mode.id
                   ? 'opacity-100'
-                  : 'opacity-40 hover:opacity-70'
+                  : 'opacity-40 hover:opacity-60'
               }`}
             >
               {mode.label}
@@ -328,14 +327,12 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
           nodeRelSize={1}
           nodeCanvasObject={(node, ctx, globalScale) => {
             if (typeof node?.x !== 'number' || typeof node?.y !== 'number') return
-            const nodeOpacity = node.type === 'emotion' ? EMOTION_LAYER_OPACITY : 1
             const val =
               node.type === 'dream'
                 ? 9
                 : 5 + Math.min(node.cluster_dream_count || 0, 12) * 1.2
             const radius = Math.sqrt(val)
             ctx.save()
-            ctx.globalAlpha = nodeOpacity
             ctx.beginPath()
             ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI)
             ctx.fillStyle = node.color || DEFAULT_DREAM_COLOR
@@ -356,16 +353,12 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
           nodeCanvasObjectMode={(node) =>
             (
               (node?.type === 'keyword' && node.is_dominant)
-              || node?.type === 'emotion'
+              || (node?.type === 'emotion' && node.is_dominant)
             )
               ? 'replace'
               : 'before'
           }
-          linkColor={(link) => (
-            link?.type === 'dream_emotion'
-              ? `rgba(31,31,31,${EMOTION_LAYER_OPACITY})`
-              : '#1f1f1f'
-          )}
+          linkColor={() => '#1f1f1f'}
           linkWidth={1.4}
           cooldownTicks={90}
           onNodeClick={(node) => {
