@@ -1,3 +1,5 @@
+import math
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -37,6 +39,45 @@ EMOTION_COLORS: dict[str, str] = {
     "uncertainty": "#95A5A6",
 }
 DEFAULT_DREAM_COLOR = "#FFDE6E"
+GENERIC_KEYWORD_TOKENS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "in",
+    "into",
+    "of",
+    "on",
+    "the",
+    "to",
+    "with",
+    "black",
+    "white",
+    "red",
+    "blue",
+    "green",
+    "yellow",
+    "brown",
+    "grey",
+    "gray",
+    "dark",
+    "light",
+}
+
+
+def _keyword_tokens(name: str) -> set[str]:
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", name.lower()):
+        if token in GENERIC_KEYWORD_TOKENS:
+            continue
+        if len(token) > 3 and token.endswith("s"):
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+
+def _has_meaningful_keyword_overlap(left: str, right: str) -> bool:
+    return bool(_keyword_tokens(left) & _keyword_tokens(right))
 
 
 def _emotion_color(emotions: list) -> str:
@@ -51,6 +92,21 @@ def normalize_keyword_name(name: Optional[str]) -> str:
     if not name:
         return ""
     return name.strip().lower()
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(left, right))
+    norm_left = math.sqrt(sum(x * x for x in left))
+    norm_right = math.sqrt(sum(x * x for x in right))
+    return dot / (norm_left * norm_right) if norm_left and norm_right else 0.0
+
+
+def _should_link_cloud_keywords(left: str, right: str, score: float) -> bool:
+    if score >= settings.GRAPH_CLOUD_STRICT_SIMILARITY_THRESHOLD:
+        return True
+    if score < settings.GRAPH_CLOUD_SIMILARITY_THRESHOLD:
+        return False
+    return _has_meaningful_keyword_overlap(left, right)
 
 
 def build_graph_data(user_id: str) -> dict:
@@ -180,25 +236,22 @@ def build_graph_data(user_id: str) -> dict:
                 for j in range(i + 1, len(keyword_node_names)):
                     if src == keyword_node_names[j]:
                         continue
-                    if sim[i][j] < 0.65:
+                    if sim[i][j] < settings.GRAPH_LOCAL_SIMILARITY_THRESHOLD:
                         continue
                     keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
         else:
             from app.services.ai_service import generate_embedding
-            import math
             embs = [generate_embedding(name) for name in keyword_node_names]
             for i, src in enumerate(keyword_node_names):
                 for j in range(i + 1, len(keyword_node_names)):
-                    if src == keyword_node_names[j]:
+                    dst = keyword_node_names[j]
+                    if src == dst:
                         continue
                     a, b = embs[i], embs[j]
-                    dot = sum(x * y for x, y in zip(a, b))
-                    norm_a = math.sqrt(sum(x * x for x in a))
-                    norm_b = math.sqrt(sum(x * x for x in b))
-                    cos_sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
-                    if cos_sim < 0.65:
+                    cos_sim = _cosine_similarity(a, b)
+                    if not _should_link_cloud_keywords(src, dst, cos_sim):
                         continue
-                    keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
+                    keyword_links.append({"source": src, "target": dst, "type": "similar"})
 
     # --- emotion links ---
     emotion_links = []

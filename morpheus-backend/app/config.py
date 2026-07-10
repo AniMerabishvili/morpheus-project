@@ -5,6 +5,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
     GEMINI_MODEL: str = "gemini-3.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    GRAPH_LOCAL_SIMILARITY_THRESHOLD: float = 0.65
+    GRAPH_CLOUD_SIMILARITY_THRESHOLD: float = 0.82
+    GRAPH_CLOUD_STRICT_SIMILARITY_THRESHOLD: float = 0.92
     # OPENAI_API_KEY: str
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
