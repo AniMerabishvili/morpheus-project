@@ -44,7 +44,7 @@ def _get_whisper_model():
 # ---------------------------------------------------------------------------
 _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 _GEMINI_MODEL = "gemini-3.5-flash"
-_GEMINI_EMBEDDING_MODEL = "text-embedding-004"
+_GEMINI_EMBEDDING_MODEL = settings.GEMINI_EMBEDDING_MODEL
 
 
 class _GeminiModel:
@@ -83,7 +83,7 @@ if settings.USE_LOCAL_MODELS:
 
 # ---------------------------------------------------------------------------
 # Sentence-transformers — 384-dim embeddings. Lazy, local only.
-# In cloud mode, generate_embedding() uses Gemini text-embedding-004.
+# In cloud mode, generate_embedding() uses the configured Gemini embedding model.
 # ---------------------------------------------------------------------------
 _embedder = None
 
@@ -295,7 +295,7 @@ def generate_embedding(text: str) -> list[float]:
     """Encode text into a 384-dimensional vector.
 
     Local mode: all-MiniLM-L6-v2 via sentence-transformers.
-    Cloud mode: Gemini text-embedding-004 with 384-dim output —
+    Cloud mode: Gemini embedding API with 384-dim output —
     compatible with the existing vector(384) Supabase schema.
     """
     if settings.USE_LOCAL_MODELS:
