@@ -7,6 +7,7 @@ const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:80
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    allowedHosts: true,
     proxy: {
       '/v1': {
         target: apiProxyTarget,
@@ -15,6 +16,6 @@ export default defineConfig({
     },
   },
   preview: {
-    allowedHosts: 'all',
+    allowedHosts: true,
   },
 })
