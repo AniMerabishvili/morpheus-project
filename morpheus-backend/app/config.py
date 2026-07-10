@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # True  → load Whisper/spaCy/sentence-transformers locally (Mac dev)
     # False → use Gemini APIs for transcription & embeddings (Railway cloud)
     USE_LOCAL_MODELS: bool = False
+    # Comma-separated list of allowed frontend origins, e.g. https://morpheus-app.up.railway.app
+    # Leave empty to allow all origins (development default).
+    ALLOWED_ORIGINS: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
