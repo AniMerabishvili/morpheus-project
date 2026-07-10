@@ -2,38 +2,41 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { apiFetch } from '../lib/api.js'
 
+const DEFAULT_DREAM_COLOR = '#FFDE6E'
+const DEFAULT_EMOTION_COLOR = '#95A5A6'
+const EMOTION_LAYER_OPACITY = 0.65
+
+const VIEW_MODES = [
+  { id: 'keywords', label: 'Keywords' },
+  { id: 'emotions', label: 'Emotions' },
+  { id: 'combined', label: 'Combined' },
+]
+
 function getNodeId(value) {
-  if (!value) {
-    return ''
-  }
-  if (typeof value === 'string') {
-    return value
-  }
+  if (!value) return ''
+  if (typeof value === 'string') return value
   return value.id || ''
 }
 
 function formatDate(value) {
-  if (!value) {
-    return 'Unknown date'
-  }
-
+  if (!value) return 'Unknown date'
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return 'Unknown date'
-  }
-
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(date)
+  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
 }
 
 function DreamGraph({ onPanelOpenChange, onStatsChange }) {
+  const graphRef = useRef(null)
   const containerRef = useRef(null)
   const [ForceGraph2D, setForceGraph2D] = useState(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
-  const [graphData, setGraphData] = useState({ nodes: [], links: [] })
+  const [viewMode, setViewMode] = useState('keywords')
+  const [rawData, setRawData] = useState({
+    nodes: [],
+    keyword_links: [],
+    emotion_links: [],
+    emotion_colors: {},
+  })
   const [dreamDetails, setDreamDetails] = useState({})
   const [selectedNode, setSelectedNode] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -41,123 +44,240 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
 
   useEffect(() => {
     let isMounted = true
-
-    import('react-force-graph-2d').then((module) => {
-      if (isMounted) {
-        setForceGraph2D(() => module.default)
-      }
+    import('react-force-graph-2d').then((m) => {
+      if (isMounted) setForceGraph2D(() => m.default)
     })
-
-    return () => {
-      isMounted = false
-    }
+    return () => { isMounted = false }
   }, [])
 
   useEffect(() => {
-    const element = containerRef.current
-    if (!element) {
-      return undefined
-    }
-
-    function updateDimensions() {
-      const rect = element.getBoundingClientRect()
+    const el = containerRef.current
+    if (!el) return undefined
+    function update() {
+      const r = el.getBoundingClientRect()
       setDimensions({
-        width: Math.max(320, Math.floor(rect.width)),
-        height: Math.max(360, Math.floor(rect.height)),
+        width: Math.max(320, Math.floor(r.width)),
+        height: Math.max(360, Math.floor(r.height)),
       })
     }
-
-    updateDimensions()
-    const observer = new ResizeObserver(updateDimensions)
-    observer.observe(element)
-
-    return () => observer.disconnect()
+    update()
+    const obs = new ResizeObserver(update)
+    obs.observe(el)
+    return () => obs.disconnect()
   }, [])
 
   useEffect(() => {
     const controller = new AbortController()
 
-    async function fetchGraphData() {
+    async function fetchData() {
       setIsLoading(true)
       setErrorMessage('')
-
       try {
-        const [graphResponse, dreamsResponse] = await Promise.all([
+        const [graphRes, dreamsRes] = await Promise.all([
           apiFetch('/v1/graph/data', { signal: controller.signal }),
           apiFetch('/v1/dreams', { signal: controller.signal }),
         ])
-
-        const graphPayload = await graphResponse.json()
-        const dreamsPayload = await dreamsResponse.json()
-
-        if (!graphResponse.ok) {
-          throw new Error(
-            graphPayload?.detail || `Graph request failed with status ${graphResponse.status}`,
-          )
-        }
-        if (!dreamsResponse.ok) {
-          throw new Error(
-            dreamsPayload?.detail || `Dream request failed with status ${dreamsResponse.status}`,
-          )
-        }
+        const graphPayload = await graphRes.json()
+        const dreamsPayload = await dreamsRes.json()
 
         const nodes = Array.isArray(graphPayload.nodes) ? graphPayload.nodes : []
-        const links = Array.isArray(graphPayload.links) ? graphPayload.links : []
-        const dreams = Array.isArray(dreamsPayload) ? dreamsPayload : []
+        setRawData({
+          nodes,
+          keyword_links: graphPayload.keyword_links || [],
+          emotion_links: graphPayload.emotion_links || [],
+          emotion_colors: graphPayload.emotion_colors || {},
+        })
 
-        setGraphData({ nodes, links })
+        const dreams = Array.isArray(dreamsPayload) ? dreamsPayload : []
         setDreamDetails(
-          dreams.reduce((details, dream) => {
-            details[`dream-${dream.id}`] = dream
-            return details
+          dreams.reduce((acc, d) => {
+            acc[`dream-${d.id}`] = d
+            return acc
           }, {}),
         )
+
         onStatsChange?.({
           nodes: nodes.length,
-          dreams: nodes.filter((node) => node.type === 'dream').length,
-          symbols: nodes.filter((node) => node.type === 'keyword').length,
-          links: links.length,
+          dreams: nodes.filter((n) => n.type === 'dream').length,
+          symbols: nodes.filter((n) => n.type === 'keyword').length,
+          links: (graphPayload.keyword_links || []).length,
         })
       } catch (error) {
         if (error.name !== 'AbortError') {
           setErrorMessage(error.message || 'Could not load graph data.')
         }
       } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false)
-        }
+        if (!controller.signal.aborted) setIsLoading(false)
       }
     }
 
-    fetchGraphData()
+    fetchData()
     return () => controller.abort()
   }, [onStatsChange])
 
-  const selectedDream = selectedNode ? dreamDetails[selectedNode.id] || selectedNode : null
+  // Active graph switches nodes + links based on view mode.
+  const graphData = useMemo(() => {
+    const emotionCounts = new Map()
+    const dreamDates = []
+    ;(rawData.emotion_links || []).forEach((link) => {
+      const targetId = getNodeId(link?.target)
+      if (!targetId) return
+      emotionCounts.set(targetId, (emotionCounts.get(targetId) || 0) + 1)
+    })
+    ;(rawData.nodes || []).forEach((node) => {
+      if (node?.type !== 'dream' || !node.created_at) return
+      const date = new Date(node.created_at)
+      if (!Number.isNaN(date.getTime())) dreamDates.push(date)
+    })
+
+    const earliestDreamDate = dreamDates.length
+      ? new Date(Math.min(...dreamDates.map((date) => date.getTime())))
+      : null
+    const accountAgeDays = earliestDreamDate
+      ? Math.floor((Date.now() - earliestDreamDate.getTime()) / 86400000)
+      : 0
+    const maxEmotionCount = Math.max(...emotionCounts.values(), 0)
+
+    const nodes = rawData.nodes.filter((n) => {
+      if (!n?.id) return false
+      if (n.type === 'dream') return true
+      if (viewMode === 'keywords') return n.type === 'keyword'
+      if (viewMode === 'emotions') return n.type === 'emotion'
+      return n.type === 'keyword' || n.type === 'emotion'
+    }).map((node) => {
+      if (node.type === 'dream') {
+        return {
+          ...node,
+          color: DEFAULT_DREAM_COLOR,
+        }
+      }
+
+      if (node.type === 'emotion') {
+        const emotionKey = String(node.label || node.id.replace(/^emotion-/, '')).trim().toLowerCase()
+        const emotionColor = rawData.emotion_colors[emotionKey] || node.color || DEFAULT_EMOTION_COLOR
+        const emotionDreamCount = emotionCounts.get(node.id) || 0
+        return {
+          ...node,
+          color: emotionColor,
+          dream_count: emotionDreamCount,
+          cluster_dream_count: emotionDreamCount,
+          is_dominant: Boolean(
+            accountAgeDays >= 90
+            && maxEmotionCount > 0
+            && emotionDreamCount === maxEmotionCount
+          ),
+        }
+      }
+
+      return {
+        ...node,
+        color: node.color || '#8A7129',
+      }
+    })
+
+    const nodeIds = new Set(nodes.map((node) => node.id))
+    const sourceLinks = viewMode === 'keywords'
+      ? rawData.keyword_links
+      : viewMode === 'emotions'
+        ? rawData.emotion_links
+        : [...(rawData.keyword_links || []), ...(rawData.emotion_links || [])]
+    const links = (sourceLinks || [])
+      .map((link) => {
+        const source = getNodeId(link?.source)
+        const target = getNodeId(link?.target)
+        if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) {
+          return null
+        }
+        return { ...link, source, target }
+      })
+      .filter(Boolean)
+
+    return { nodes, links }
+  }, [rawData, viewMode])
+
+  useEffect(() => {
+    if (!graphRef.current) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      graphRef.current?.d3ReheatSimulation?.()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [graphData])
+
+  const visibleNodeCount = graphData.nodes.length
+  const visibleDreamCount = graphData.nodes.filter((n) => n.type === 'dream').length
+  const visibleSymbolCount = graphData.nodes.filter((n) => n.type === 'keyword').length
+
+  useEffect(() => {
+    onStatsChange?.({
+      nodes: visibleNodeCount,
+      dreams: visibleDreamCount,
+      symbols: visibleSymbolCount,
+      links: graphData.links.length,
+    })
+  }, [graphData.links.length, onStatsChange, visibleDreamCount, visibleNodeCount, visibleSymbolCount])
+
+  const activeSelectedNode = selectedNode
+    ? graphData.nodes.find((node) => node.id === selectedNode.id) || selectedNode
+    : null
+  const selectedDream = activeSelectedNode
+    ? dreamDetails[activeSelectedNode.id] || activeSelectedNode
+    : null
 
   useEffect(() => {
     onPanelOpenChange?.(Boolean(selectedDream))
   }, [onPanelOpenChange, selectedDream])
 
+  // Symbols connected to selected dream node (keyword mode)
   const selectedSymbols = useMemo(() => {
-    if (!selectedNode) {
-      return []
-    }
-
-    const keywordById = new Map(
+    if (!selectedNode) return []
+    const kwMap = new Map(
       graphData.nodes
-        .filter((node) => node.type === 'keyword')
-        .map((node) => [node.id, node.label]),
+        .filter((n) => n?.type === 'keyword')
+        .map((n) => [n.id, n.label]),
     )
-
     return graphData.links
-      .filter((link) => getNodeId(link.source) === selectedNode.id)
-      .map((link) => keywordById.get(getNodeId(link.target)))
+      .filter((l) => l?.type === 'dream_keyword' && getNodeId(l.source) === selectedNode.id)
+      .map((l) => kwMap.get(getNodeId(l.target)))
       .filter(Boolean)
   }, [graphData.links, graphData.nodes, selectedNode])
 
+  // Legend: unique (emotion, color) pairs present in the current graph.
+  const emotionLegend = useMemo(() => {
+    const seen = new Map()
+    if (viewMode === 'keywords') return []
+
+    graphData.nodes.forEach((n) => {
+      if (n?.type === 'emotion' && n.label) {
+        seen.set(n.label, n.color || DEFAULT_EMOTION_COLOR)
+      } else if (n?.type === 'dream' && n.dominant_emotion && n.color !== DEFAULT_DREAM_COLOR) {
+        if (!seen.has(n.dominant_emotion)) seen.set(n.dominant_emotion, n.color)
+      }
+    })
+    return [...seen.entries()]
+  }, [graphData.nodes, viewMode])
+
   return (
-    <div ref={containerRef} className="relative h-full w-full bg-[#0f0f0f]">
+    <div className="flex h-full w-full flex-col bg-[#0f0f0f]">
+      <div className="shrink-0 px-5 pb-3 pt-20">
+        <div className="flex items-center gap-5">
+          {VIEW_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              type="button"
+              onClick={() => setViewMode(mode.id)}
+              className={`text-xs font-bold text-[#E6DFA9] transition-opacity ${
+                viewMode === mode.id
+                  ? 'opacity-100'
+                  : 'opacity-40 hover:opacity-70'
+              }`}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div ref={containerRef} className="relative min-h-0 flex-1 bg-[#0f0f0f]">
       {isLoading ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0f0f0f]">
           <div
@@ -174,33 +294,89 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
         </div>
       ) : null}
 
+      {/* Emotion color legend */}
+      {!isLoading && !errorMessage && emotionLegend.length > 0 ? (
+        <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-1.5 rounded-lg border border-[#1f1f1f] bg-[#141414]/90 p-3">
+          <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-[#8A7129]">
+            Emotions
+          </p>
+          {emotionLegend.map(([label, color]) => (
+            <div key={label} className="flex items-center gap-2">
+              <span
+                className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                style={{ background: color }}
+              />
+              <span className="text-xs font-bold capitalize text-[#E6DFA9]">{label}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {ForceGraph2D && dimensions.width > 0 && dimensions.height > 0 ? (
         <ForceGraph2D
+          ref={graphRef}
           graphData={graphData}
           width={dimensions.width}
           height={dimensions.height}
           backgroundColor="#0f0f0f"
-          nodeColor={(node) => node.color}
-          nodeLabel={(node) => node.label}
-          nodeVal={(node) => (node.type === 'dream' ? 9 : 5)}
+          nodeColor={(node) => node?.color || DEFAULT_DREAM_COLOR}
+          nodeLabel={(node) => node?.label || ''}
+          nodeVal={(node) => {
+            if (node?.type === 'dream') return 9
+            return 5 + Math.min(node?.cluster_dream_count || 0, 12) * 1.2
+          }}
           nodeRelSize={1}
-          linkColor={() => '#1f1f1f'}
+          nodeCanvasObject={(node, ctx, globalScale) => {
+            if (typeof node?.x !== 'number' || typeof node?.y !== 'number') return
+            const nodeOpacity = node.type === 'emotion' ? EMOTION_LAYER_OPACITY : 1
+            const val =
+              node.type === 'dream'
+                ? 9
+                : 5 + Math.min(node.cluster_dream_count || 0, 12) * 1.2
+            const radius = Math.sqrt(val)
+            ctx.save()
+            ctx.globalAlpha = nodeOpacity
+            ctx.beginPath()
+            ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI)
+            ctx.fillStyle = node.color || DEFAULT_DREAM_COLOR
+            ctx.fill()
+            const showLabel =
+              (node.type === 'keyword' && node.is_dominant) ||
+              (node.type === 'emotion' && node.is_dominant)
+            if (showLabel) {
+              const fontSize = Math.max(10, 13 / globalScale)
+              ctx.font = `700 ${fontSize}px sans-serif`
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'top'
+              ctx.fillStyle = '#FFDE6E'
+              ctx.fillText(node.label || '', node.x, node.y + radius + 2)
+            }
+            ctx.restore()
+          }}
+          nodeCanvasObjectMode={(node) =>
+            (
+              (node?.type === 'keyword' && node.is_dominant)
+              || node?.type === 'emotion'
+            )
+              ? 'replace'
+              : 'before'
+          }
+          linkColor={(link) => (
+            link?.type === 'dream_emotion'
+              ? `rgba(31,31,31,${EMOTION_LAYER_OPACITY})`
+              : '#1f1f1f'
+          )}
           linkWidth={1.4}
           cooldownTicks={90}
           onNodeClick={(node) => {
-            if (node.type !== 'dream') {
-              return
-            }
-            if (selectedNode && selectedNode.id === node.id) {
-              setSelectedNode(null)
-            } else {
-              setSelectedNode(node)
-            }
+            if (node?.type !== 'dream') return
+            setSelectedNode((prev) => (prev?.id === node.id ? null : node))
           }}
           onBackgroundClick={() => setSelectedNode(null)}
         />
       ) : null}
 
+      {/* Side panel */}
       <aside
         className={`absolute bottom-16 right-0 top-20 z-40 w-full max-w-md transform border-l border-[#1f1f1f] bg-[#141414] p-4 shadow-2xl transition-transform duration-300 sm:w-[420px] sm:p-6 md:bottom-0 ${
           selectedDream ? 'translate-x-0' : 'translate-x-full'
@@ -211,10 +387,10 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E] sm:text-3xl">
-                  {selectedDream.title || selectedNode.label || 'Untitled Dream'}
+                  {selectedDream.title || activeSelectedNode?.label || 'Untitled Dream'}
                 </h2>
                 <p className="mt-2 text-sm font-bold text-[#8A7129]">
-                  {formatDate(selectedDream.created_at || selectedNode.created_at)}
+                  {formatDate(selectedDream.created_at || activeSelectedNode?.created_at)}
                 </p>
               </div>
               <button
@@ -227,28 +403,75 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
               </button>
             </div>
 
-            <p className="whitespace-pre-wrap text-base leading-8 text-[#E6DFA9]">
-              {selectedDream.analysis || 'No analysis available yet.'}
-            </p>
+            {/* Dominant emotion badge */}
+            {activeSelectedNode?.dominant_emotion ? (
+              <div className="flex items-center gap-2">
+                <span
+                  className="h-3 w-3 flex-shrink-0 rounded-full"
+                  style={{ background: activeSelectedNode?.color || DEFAULT_DREAM_COLOR }}
+                />
+                <span className="text-sm font-bold capitalize text-[#E6DFA9]">
+                  {activeSelectedNode?.dominant_emotion}
+                </span>
+              </div>
+            ) : null}
+
+            {selectedDream.raw_text ? (
+              <div>
+                <p className="mb-2 text-sm font-bold text-[#8A7129]">Your dream</p>
+                <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9]">
+                  {selectedDream.raw_text}
+                </p>
+              </div>
+            ) : null}
+
+            <div>
+              <p className="mb-2 text-sm font-bold text-[#8A7129]">Analysis</p>
+              <p className="whitespace-pre-wrap text-base leading-8 text-[#E6DFA9]">
+                {selectedDream.analysis || 'No analysis available yet.'}
+              </p>
+            </div>
 
             {selectedSymbols.length ? (
               <div>
                 <p className="mb-3 font-bold text-[#FFDE6E]">Symbols</p>
                 <div className="flex flex-wrap gap-2">
-                  {selectedSymbols.map((symbol) => (
+                  {selectedSymbols.map((s) => (
                     <span
-                      key={symbol}
+                      key={s}
                       className="rounded-full bg-[#8A7129] px-3 py-1 text-sm font-bold text-[#E6DFA9]"
                     >
-                      {symbol}
+                      {s}
                     </span>
                   ))}
+                </div>
+              </div>
+            ) : null}
+
+            {Array.isArray(selectedDream.emotions) && selectedDream.emotions.length > 0 ? (
+              <div>
+                <p className="mb-3 font-bold text-[#FFDE6E]">Emotions</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedDream.emotions.map((em) => {
+                    const key = em.trim().toLowerCase()
+                    const color = rawData.emotion_colors[key] || DEFAULT_EMOTION_COLOR
+                    return (
+                      <span
+                        key={em}
+                        className="rounded-full px-3 py-1 text-sm font-bold text-[#0f0f0f]"
+                        style={{ background: color }}
+                      >
+                        {em}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             ) : null}
           </div>
         ) : null}
       </aside>
+      </div>
     </div>
   )
 }

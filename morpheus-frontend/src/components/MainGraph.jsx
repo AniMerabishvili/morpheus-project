@@ -15,6 +15,7 @@ function MainGraph({ onStatsChange, stats }) {
         />
       </div>
 
+      {/* Stats + legend panel */}
       <div
         className={`absolute bottom-24 left-5 z-30 rounded-xl border border-[#1f1f1f] bg-[#0f0f0f]/85 p-4 backdrop-blur-md transition-opacity duration-200 md:bottom-5 ${
           isDreamPanelOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'

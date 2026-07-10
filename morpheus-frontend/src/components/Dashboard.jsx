@@ -89,6 +89,16 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
     return () => controller.abort()
   }, [refreshKey])
 
+  async function handleDeleteDream(dreamId) {
+    await apiFetch(`/v1/dreams/${encodeURIComponent(dreamId)}`, {
+      method: 'DELETE',
+    })
+    setDreams((currentDreams) => currentDreams.filter((dream) => dream.id !== dreamId))
+    setSelectedDream((currentDream) => (
+      currentDream?.id === dreamId ? null : currentDream
+    ))
+  }
+
   return (
     <main className="relative min-h-screen bg-[#0f0f0f] px-4 pb-28 pt-28 text-[#E6DFA9] transition-opacity duration-300 sm:px-6 lg:px-8">
       <section className="mx-auto flex w-full max-w-6xl flex-col gap-4">
@@ -111,6 +121,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
                 key={dream.id}
                 dream={dream}
                 onOpen={() => setSelectedDream(dream)}
+                onDelete={handleDeleteDream}
               />
             ))}
           </div>
@@ -118,7 +129,10 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
       </section>
 
       {selectedDream ? (
-        <DreamModal dream={selectedDream} onClose={() => setSelectedDream(null)} />
+        <DreamModal
+          dream={selectedDream}
+          onClose={() => setSelectedDream(null)}
+        />
       ) : null}
     </main>
   )
@@ -162,23 +176,111 @@ function EmptyState({ onRecord }) {
   )
 }
 
-function DreamCard({ dream, onOpen }) {
+function TrashIcon() {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="min-h-52 rounded-xl border border-[#1f1f1f] bg-[#141414] p-5 text-left transition hover:border-[#8A7129] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
     >
-      <h2 className="mb-3 text-2xl font-semibold leading-tight text-[#FFDE6E]">
-        {dream.title || 'Untitled Dream'}
-      </h2>
-      <p className="mb-6 text-sm font-bold text-[#8A7129]">
-        {relativeDate(dream.created_at)}
-      </p>
-      <p className="leading-7 text-[#E6DFA9]">
-        {truncateAnalysis(dream.analysis) || 'No analysis available yet.'}
-      </p>
-    </button>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  )
+}
+
+function DreamCard({ dream, onOpen, onDelete }) {
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+
+  async function confirmDelete() {
+    setIsDeleting(true)
+    setDeleteError('')
+
+    try {
+      await onDelete(dream.id)
+    } catch (error) {
+      setDeleteError(error.message || 'Could not delete this dream.')
+      setIsDeleting(false)
+    }
+  }
+
+  return (
+    <article className="group min-h-52 rounded-xl border border-[#1f1f1f] bg-[#141414] p-5 transition hover:border-[#8A7129]">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+        >
+          <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E]">
+            {dream.title || 'Untitled Dream'}
+          </h2>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setIsConfirmingDelete(true)
+            setDeleteError('')
+          }}
+          className="rounded-md p-1.5 text-[#8A7129] opacity-0 transition hover:bg-[#1f1f1f] hover:text-[#FFDE6E] hover:opacity-100 group-hover:opacity-70 group-focus-within:opacity-70 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+          aria-label={`Delete ${dream.title || 'dream'}`}
+        >
+          <TrashIcon />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+      >
+        <p className="mb-6 text-sm font-bold text-[#8A7129]">
+          {relativeDate(dream.created_at)}
+        </p>
+        <p className="leading-7 text-[#E6DFA9]">
+          {truncateAnalysis(dream.analysis) || 'No analysis available yet.'}
+        </p>
+      </button>
+      {isConfirmingDelete ? (
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <button
+              type="button"
+              onClick={confirmDelete}
+              disabled={isDeleting}
+              className="font-black text-[#FFDE6E] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+            >
+              {isDeleting ? 'Deleting...' : 'Confirm'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsConfirmingDelete(false)
+                setDeleteError('')
+              }}
+              disabled={isDeleting}
+              className="font-bold text-[#8A7129] transition hover:text-[#E6DFA9] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+            >
+              Cancel
+            </button>
+          </div>
+          {deleteError ? (
+            <p className="mt-3 text-sm font-bold text-[#E6DFA9]">
+              {deleteError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
   )
 }
 
@@ -213,9 +315,20 @@ function DreamModal({ dream, onClose }) {
             Close
           </button>
         </div>
-        <p className="whitespace-pre-wrap text-lg leading-8 text-[#E6DFA9]">
-          {dream.analysis || 'No analysis available yet.'}
-        </p>
+        {dream.raw_text ? (
+          <div className="mb-6">
+            <p className="mb-2 text-sm font-bold text-[#8A7129]">Your dream</p>
+            <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9]">
+              {dream.raw_text}
+            </p>
+          </div>
+        ) : null}
+        <div>
+          <p className="mb-2 text-sm font-bold text-[#8A7129]">Analysis</p>
+          <p className="whitespace-pre-wrap text-lg leading-8 text-[#E6DFA9]">
+            {dream.analysis || 'No analysis available yet.'}
+          </p>
+        </div>
       </div>
     </div>
   )

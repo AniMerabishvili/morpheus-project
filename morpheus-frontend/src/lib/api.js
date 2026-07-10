@@ -45,5 +45,16 @@ export async function apiFetch(path, options = {}) {
     throw new Error('Your session expired. Please sign in again.')
   }
 
+  if (!response.ok) {
+    let detail = `Request failed: ${response.status}`
+    try {
+      const body = await response.json()
+      if (body?.detail) detail = body.detail
+    } catch {
+      // non-JSON error body — keep the status message
+    }
+    throw new Error(detail)
+  }
+
   return response
 }

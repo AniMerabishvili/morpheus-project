@@ -3,6 +3,43 @@ import { useNavigate } from 'react-router-dom'
 
 import { apiFetch } from '../lib/api.js'
 
+const QUOTES_EN = [
+  { text: 'The interpretation of dreams is the royal road to a knowledge of the unconscious activities of the mind.', author: 'Sigmund Freud' },
+  { text: 'Your vision will become clear only when you can look into your own heart. Who looks outside, dreams; who looks inside, awakes.', author: 'Carl Jung' },
+  { text: 'The very cave you are afraid to enter turns out to be the source of what you are looking for.', author: 'Joseph Campbell' },
+  { text: 'In rivers, the water that you touch is the last of what has passed and the first of that which comes.', author: 'Leonardo da Vinci' },
+  { text: "Passion is always a mystery and unaccountable, and unfortunately there is no doubt that life does not spare its purest children and often it is just the most deserving people who cannot help loving those who destroy them.", author: 'Hermann Hesse' },
+  { text: 'A journey of a thousand miles begins with a single step.', author: 'Lao Tzu' },
+  { text: 'What lies behind us and what lies before us are but tiny matters compared to what lies within us.', author: 'Henry Stanley Haskins' },
+  { text: 'The privilege of a lifetime is being who you are.', author: 'Joseph Campbell' },
+  { text: 'Deep rivers move in silence, shallow brooks are noisy.', author: 'English Proverb' },
+  { text: "To fly, we have to have resistance. It's all about turbulence.", author: 'Maya Lin' },
+  { text: "Stars can't shine without darkness.", author: 'Anonymous' },
+]
+
+const QUOTES_KA = [
+  { text: 'სიზმრების ინტერპრეტაცია არის სამეფო გზა გონების არაცნობიერი აქტივობის შესაცნობად.', author: 'ზიგმუნდ ფროიდი' },
+  { text: 'შენი ხედვა მხოლოდ მაშინ გახდება ნათელი, როდესაც საკუთარ გულში ჩაიხედავ. ვინც გარეთ იყურება — სიზმარშია; ვინც შიგნით იყურება — იღვიძებს.', author: 'კარლ იუნგი' },
+  { text: 'აღმოჩნდება ხოლმე, რომ სწორედ ის გამოქვაბული, რომელში შესვლაც ყველაზე მეტად გეშინია, არის იმის წყარო, რასაც ეძებ.', author: 'ჯოზეფ კემპბელი' },
+  { text: 'მდინარეში წყალი, რომელსაც ეხები, არის უკანასკნელი იმათგან, რაც წავიდა და პირველი იმათგან, რაც მოდის.', author: 'ლეონარდო და ვინჩი' },
+  { text: 'ვნება ყოველთვის საიდუმლოა და აუხსნელი. სამწუხაროდ, ეჭვგარეშეა, რომ სიცოცხლე არ ინდობს თავის ყველაზე წმინდა შვილებს და ხშირად სწორედ ყველაზე ღირსეულ ადამიანებს არაფრის დიდებით არ შეუძლიათ, არ უყვარდეთ ისინი, ვინც მათ ანადგურებს.', author: 'ჰერმან ჰესე' },
+  { text: 'ათასი მილის სიგრძის მოგზაურობა ერთი მარტივი ნაბიჯით იწყება.', author: 'ლაო ძი' },
+  { text: 'ის, რაც ჩვენს უკანაა და ის, რაც ჩვენს წინაა, უმნიშვნელო წვრილმანია იმასთან შედარებით, რაც ჩვენს შიგნითაა.', author: 'ჰენრი სტენლი ჰასკინსი' },
+  { text: 'ცხოვრების უდიდესი პრივილეგიაა, იყო ის, ვინც ხარ.', author: 'ჯოზეფ კემპბელი' },
+  { text: 'ღრმა მდინარეები ჩუმად მიედინებიან, წყალთხელი ნაკადულები კი ხმაურობენ.', author: 'ინგლისური ანდაზა' },
+  { text: 'აფრენისთვის წინააღმდეგობა გვჭირდება. მთელი არსი ტურბულენტობაშია.', author: 'მაია ლინი' },
+  { text: 'ვარსკვლავები სიბნელის გარეშე ვერ ანათებენ.', author: 'ანონიმური' },
+]
+
+function isGeorgian(text) {
+  return /[\u10D0-\u10FF]/.test(text)
+}
+
+function pickQuote(dreamText) {
+  const library = isGeorgian(dreamText) ? QUOTES_KA : QUOTES_EN
+  return library[Math.floor(Math.random() * library.length)]
+}
+
 const GOLD = '#FFDE6E'
 const GOLD_PALE = '#E6DFA9'
 const GOLD_SHADOW = '#8A7129'
@@ -60,6 +97,8 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
   const [result, setResult] = useState(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [bars, setBars] = useState(initialBars)
+  const [loadingQuote, setLoadingQuote] = useState(null)
+  const [quoteVisible, setQuoteVisible] = useState(true)
 
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
@@ -95,6 +134,25 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
       }
     }
   }, [audioUrl])
+
+  useEffect(() => {
+    if (!isUploading) {
+      setLoadingQuote(null)
+      return undefined
+    }
+    setLoadingQuote(pickQuote(dreamText))
+    setQuoteVisible(true)
+
+    const cycleId = window.setInterval(() => {
+      setQuoteVisible(false)
+      window.setTimeout(() => {
+        setLoadingQuote(pickQuote(dreamText))
+        setQuoteVisible(true)
+      }, 600)
+    }, 7000)
+
+    return () => window.clearInterval(cycleId)
+  }, [isUploading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function resetComponent(nextMode = mode) {
     discardRecordingRef.current = true
@@ -333,67 +391,95 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
 
   return (
     <section style={styles.card}>
-      <div style={styles.header}>
-        <p style={styles.eyebrow}>Morpheus</p>
-        <h1 style={styles.title}>Share your dream</h1>
-      </div>
+      <style>{`@keyframes morpheus-spin { to { transform: rotate(360deg); } }`}</style>
 
-      <div style={styles.modeToggle} aria-label="Dream input mode">
-        <button
-          type="button"
-          onClick={() => switchMode('voice')}
-          style={{
-            ...styles.modeButton,
-            ...(mode === 'voice' ? styles.modeButtonActive : {}),
-          }}
-        >
-          Voice
-        </button>
-        <button
-          type="button"
-          onClick={() => switchMode('text')}
-          style={{
-            ...styles.modeButton,
-            ...(mode === 'text' ? styles.modeButtonActive : {}),
-          }}
-        >
-          Text
-        </button>
-      </div>
-      {mode === 'voice' ? (
-        <VoiceMode
-          status={status}
-          elapsedSeconds={elapsedSeconds}
-          bars={bars}
-          audioUrl={audioUrl}
-          onStart={startRecording}
-          onStop={stopRecording}
-          onSubmit={submitVoice}
-          onReset={() => resetComponent('voice')}
-        />
+      {isUploading ? (
+        <div style={styles.loadingBlock}>
+          <p style={styles.quoteHeader}>
+            {isGeorgian(dreamText)
+              ? 'სანამ შენი სიზმარი გაანალიზდება, გახსოვდეს:'
+              : 'While your dream is analyzing, remember:'}
+          </p>
+          {loadingQuote ? (
+            <div
+              style={{
+                ...styles.quoteBox,
+                opacity: quoteVisible ? 1 : 0,
+                transform: quoteVisible ? 'translateY(0)' : 'translateY(10px)',
+              }}
+            >
+              <p style={styles.quoteText}>&#8220;{loadingQuote.text}&#8221;</p>
+              <p style={styles.quoteAuthor}>— {loadingQuote.author}</p>
+            </div>
+          ) : null}
+        </div>
       ) : (
-        <TextMode
-          value={dreamText}
-          status={status}
-          canSubmit={canSubmitText}
-          onChange={setDreamText}
-          onSubmit={submitText}
-        />
+        <>
+          <div style={styles.header}>
+            <p style={styles.eyebrow}>Morpheus</p>
+            <h1 style={styles.title}>Share your dream</h1>
+          </div>
+
+          {!result && (
+            <>
+              <div style={styles.modeToggle} aria-label="Dream input mode">
+                <button
+                  type="button"
+                  onClick={() => switchMode('voice')}
+                  style={{
+                    ...styles.modeButton,
+                    ...(mode === 'voice' ? styles.modeButtonActive : {}),
+                  }}
+                >
+                  Voice
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchMode('text')}
+                  style={{
+                    ...styles.modeButton,
+                    ...(mode === 'text' ? styles.modeButtonActive : {}),
+                  }}
+                >
+                  Text
+                </button>
+              </div>
+              {mode === 'voice' ? (
+                <VoiceMode
+                  status={status}
+                  elapsedSeconds={elapsedSeconds}
+                  bars={bars}
+                  audioUrl={audioUrl}
+                  onStart={startRecording}
+                  onStop={stopRecording}
+                  onSubmit={submitVoice}
+                  onReset={() => resetComponent('voice')}
+                />
+              ) : (
+                <TextMode
+                  value={dreamText}
+                  status={status}
+                  canSubmit={canSubmitText}
+                  onChange={setDreamText}
+                  onSubmit={submitText}
+                />
+              )}
+            </>
+          )}
+
+          {errorMessage ? <p style={styles.error}>{errorMessage}</p> : null}
+
+          {result ? (
+            <ResultsCard
+              result={result}
+              onViewGraph={() => {
+                onClose?.()
+                navigate('/graph')
+              }}
+            />
+          ) : null}
+        </>
       )}
-
-      {isUploading ? <p style={styles.loading}>Analysing your dream...</p> : null}
-
-      {errorMessage ? <p style={styles.error}>{errorMessage}</p> : null}
-
-      {result ? (
-        <ResultsCard
-          result={result}
-          onViewGraph={() => {
-            onClose?.()
-            navigate('/graph')
-          }}
-        />
-      ) : null}
     </section>
   )
 }
@@ -751,6 +837,54 @@ const styles = {
     padding: '10px 14px',
     cursor: 'pointer',
     fontWeight: 900,
+  },
+  loadingBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '420px',
+  },
+  loadingSpinner: {
+    width: '36px',
+    height: '36px',
+    borderRadius: '999px',
+    border: `2px solid ${BORDER}`,
+    borderTopColor: GOLD,
+    animation: 'morpheus-spin 0.9s linear infinite',
+  },
+  quoteBox: {
+    maxWidth: '480px',
+    width: '100%',
+    textAlign: 'center',
+    padding: '16px 20px',
+    border: `1px solid ${BORDER}`,
+    borderRadius: '8px',
+    background: '#101010',
+    boxSizing: 'border-box',
+    transition: 'opacity 0.6s ease, transform 0.6s ease',
+  },
+  quoteHeader: {
+    margin: '0 0 18px',
+    color: GOLD,
+    fontSize: '13px',
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+    textAlign: 'center',
+    opacity: 0.85,
+  },
+  quoteText: {
+    margin: '0 0 8px',
+    color: GOLD_PALE,
+    fontSize: '15px',
+    lineHeight: 1.65,
+    fontStyle: 'italic',
+  },
+  quoteAuthor: {
+    margin: 0,
+    color: GOLD_SHADOW,
+    fontSize: '13px',
+    fontWeight: 700,
   },
 }
 

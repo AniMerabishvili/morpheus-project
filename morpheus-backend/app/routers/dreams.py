@@ -31,7 +31,7 @@ def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
     """Return saved dreams for the dreams list view."""
     response = (
         supabase.table("dreams")
-        .select("id,title,raw_text,analysis,created_at")
+        .select("id,title,raw_text,analysis,emotions,created_at")
         .eq("user_id", current_user.id)
         .order("created_at", desc=True)
         .execute()
@@ -44,7 +44,7 @@ def get_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     """Return a single dream only if it belongs to the authenticated user."""
     response = (
         supabase.table("dreams")
-        .select("id,title,raw_text,analysis,created_at,user_id")
+        .select("id,title,raw_text,analysis,emotions,created_at,user_id")
         .eq("id", dream_id)
         .eq("user_id", current_user.id)
         .limit(1)
@@ -123,6 +123,7 @@ def save_dream(
                 "raw_text": processed_text,
                 "analysis": entities.get("summary", ""),
                 "embedding": embedding,
+                "emotions": entities.get("emotions", []),
             }
         )
         .execute()

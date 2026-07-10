@@ -114,8 +114,6 @@ function AppShell() {
         </Routes>
       </div>
 
-      {location.pathname !== '/graph' ? <AppFooter /> : null}
-
       <button
         type="button"
         onClick={() => setIsRecorderOpen(true)}
@@ -178,14 +176,6 @@ function AuthLoadingScreen() {
         role="status"
       />
     </main>
-  )
-}
-
-function AppFooter() {
-  return (
-    <footer className="bg-[#0f0f0f] px-4 pb-24 pt-6 text-center text-xs font-bold text-[#8A7129] md:pb-8">
-      Built for Bachelor's Thesis — [Your Name] — [University] — 2025
-    </footer>
   )
 }
 
