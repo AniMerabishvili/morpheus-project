@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
     WHISPER_MODEL: str = "medium"
+    # True  → load Whisper/spaCy/sentence-transformers locally (Mac dev)
+    # False → use Gemini APIs for transcription & embeddings (Railway cloud)
+    USE_LOCAL_MODELS: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

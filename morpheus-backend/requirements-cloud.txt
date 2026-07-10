@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
+supabase
+google-genai
+python-multipart
+tenacity

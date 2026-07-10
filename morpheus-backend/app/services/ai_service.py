@@ -8,22 +8,27 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-import spacy
-from names_dataset import NameDataset
 from google import genai
 from google.genai import types
 # from openai import OpenAI
 from pydantic import BaseModel, Field
-from sentence_transformers import SentenceTransformer
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
-import whisper
 
 from app.database import supabase
 from app.config import settings
 
 # ---------------------------------------------------------------------------
-# Whisper — loaded lazily and reused after the first transcription.
-# WHISPER_MODEL env var: "medium" locally, "base" on Railway (512 MB limit).
+# Local-only heavy imports — skipped entirely in cloud mode to save RAM.
+# torch alone is 200-400 MB; omitting it keeps Railway under the free 512 MB limit.
+# ---------------------------------------------------------------------------
+if settings.USE_LOCAL_MODELS:
+    import spacy as _spacy_mod
+    from names_dataset import NameDataset as _NameDataset
+    import whisper as _whisper_mod
+    from sentence_transformers import SentenceTransformer as _SentenceTransformer
+
+# ---------------------------------------------------------------------------
+# Whisper — loaded lazily. Only used when USE_LOCAL_MODELS=True.
 # ---------------------------------------------------------------------------
 _whisper_model = None
 
@@ -31,7 +36,7 @@ _whisper_model = None
 def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:
-        _whisper_model = whisper.load_model(settings.WHISPER_MODEL)
+        _whisper_model = _whisper_mod.load_model(settings.WHISPER_MODEL)
     return _whisper_model
 
 # ---------------------------------------------------------------------------
@@ -39,6 +44,7 @@ def _get_whisper_model():
 # ---------------------------------------------------------------------------
 _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 _GEMINI_MODEL = "gemini-3.5-flash"
+_GEMINI_EMBEDDING_MODEL = "text-embedding-004"
 
 
 class _GeminiModel:
@@ -65,13 +71,19 @@ gemini_model = _GeminiModel()
 # _OPENAI_MODEL = "gpt-4o-mini"
 
 # ---------------------------------------------------------------------------
-# spaCy — for accurate PERSON entity detection (avoids mis-tagging place names).
+# spaCy — local only. Loaded at startup when USE_LOCAL_MODELS=True.
+# In cloud mode, anonymize_text() falls back to regex-only PII removal.
 # ---------------------------------------------------------------------------
-_nlp = spacy.load("en_core_web_sm")
-_name_db = NameDataset()
+_nlp = None
+_name_db = None
+
+if settings.USE_LOCAL_MODELS:
+    _nlp = _spacy_mod.load("en_core_web_sm")
+    _name_db = _NameDataset()
 
 # ---------------------------------------------------------------------------
-# Sentence-transformers — 384-dim embeddings match the Supabase schema.
+# Sentence-transformers — 384-dim embeddings. Lazy, local only.
+# In cloud mode, generate_embedding() uses Gemini text-embedding-004.
 # ---------------------------------------------------------------------------
 _embedder = None
 
@@ -79,7 +91,7 @@ _embedder = None
 def _get_embedder():
     global _embedder
     if _embedder is None:
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        _embedder = _SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder
 
 
@@ -109,17 +121,8 @@ def _convert_to_wav(input_path: str) -> str:
     return wav_path
 
 
-def transcribe_audio(audio_path: str) -> dict:
-    """Transcribe audio and return English text.
-
-    Uses task="translate" so any language (Georgian, English, etc.) is
-    automatically detected and translated to English. No language= lock,
-    so Whisper auto-detects the source language.
-
-    Cleans up both the original upload and the temp WAV before returning.
-    Returns:
-        {"english_text": str}
-    """
+def _transcribe_local(audio_path: str) -> dict:
+    """Transcribe using local Whisper with ffmpeg pre-processing."""
     wav_path: Optional[str] = None
     try:
         wav_path = _convert_to_wav(audio_path)
@@ -130,6 +133,55 @@ def transcribe_audio(audio_path: str) -> dict:
             os.remove(audio_path)
         if wav_path and os.path.exists(wav_path):
             os.remove(wav_path)
+
+
+def _transcribe_gemini(audio_path: str) -> dict:
+    """Transcribe using Gemini's audio API (cloud mode, no ffmpeg needed)."""
+    try:
+        ext = os.path.splitext(audio_path)[1].lower()
+        mime_map = {
+            ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
+            ".m4a": "audio/mp4",
+            ".ogg": "audio/ogg",
+            ".webm": "audio/webm",
+            ".flac": "audio/flac",
+            ".aac": "audio/aac",
+        }
+        mime_type = mime_map.get(ext, "audio/mpeg")
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+        response = _gemini_client.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=types.Content(
+                parts=[
+                    types.Part(inline_data=types.Blob(data=audio_bytes, mime_type=mime_type)),
+                    types.Part(text=(
+                        "Transcribe this audio. If the audio is not in English "
+                        "(for example Georgian, Russian, or any other language), "
+                        "translate the transcription to English. "
+                        "Return only the plain transcript text — no labels, no explanations, no formatting."
+                    )),
+                ]
+            ),
+        )
+        return {"english_text": (response.text or "").strip()}
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+
+def transcribe_audio(audio_path: str) -> dict:
+    """Transcribe audio and return English text.
+
+    Local mode: Whisper with ffmpeg pre-processing, any language → English.
+    Cloud mode: audio sent inline to Gemini, which transcribes and translates.
+    Returns:
+        {"english_text": str}
+    """
+    if settings.USE_LOCAL_MODELS:
+        return _transcribe_local(audio_path)
+    return _transcribe_gemini(audio_path)
 
 
 # ---------------------------------------------------------------------------
@@ -203,30 +255,31 @@ def anonymize_text(text: str) -> str:
       - Specific dates                → [DATE]
       - Personal/national ID numbers  → [ID]
     """
-    doc = _nlp(text)
-    replacements: list[tuple[int, int, str]] = []
+    if settings.USE_LOCAL_MODELS and _nlp is not None:
+        doc = _nlp(text)
+        replacements: list[tuple[int, int, str]] = []
 
-    for ent in doc.ents:
-        if ent.label_ != "PERSON":
-            continue
-        tokens = [t for t in ent]
+        for ent in doc.ents:
+            if ent.label_ != "PERSON":
+                continue
+            tokens = [t for t in ent]
 
-        if len(tokens) == 1:
-            # Single-word entity: redact only if the dataset says it is a surname.
-            token = tokens[0]
-            if _is_surname(token.text):
-                replacements.append((token.idx, token.idx + len(token.text), "[SURNAME]"))
-        else:
-            # Multi-word entity (e.g. "John Smith"): redact only the last token.
-            surname_token = tokens[-1]
-            replacements.append(
-                (surname_token.idx, surname_token.idx + len(surname_token.text), "[SURNAME]")
-            )
+            if len(tokens) == 1:
+                # Single-word entity: redact only if the dataset says it is a surname.
+                token = tokens[0]
+                if _is_surname(token.text):
+                    replacements.append((token.idx, token.idx + len(token.text), "[SURNAME]"))
+            else:
+                # Multi-word entity (e.g. "John Smith"): redact only the last token.
+                surname_token = tokens[-1]
+                replacements.append(
+                    (surname_token.idx, surname_token.idx + len(surname_token.text), "[SURNAME]")
+                )
 
-    for start, end, placeholder in sorted(replacements, reverse=True):
-        text = text[:start] + placeholder + text[end:]
+        for start, end, placeholder in sorted(replacements, reverse=True):
+            text = text[:start] + placeholder + text[end:]
 
-    # Regex-based replacements for the remaining PII types.
+    # Regex-based replacements always run regardless of mode.
     text = _RE_EMAIL.sub("[EMAIL]", text)
     text = _RE_PHONE.sub("[PHONE]", text)
     text = _RE_DATE.sub("[DATE]", text)
@@ -239,11 +292,20 @@ def anonymize_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def generate_embedding(text: str) -> list[float]:
-    """Encode text into a 384-dimensional vector using all-MiniLM-L6-v2.
+    """Encode text into a 384-dimensional vector.
 
-    The returned list matches the vector(384) column in the Supabase schema.
+    Local mode: all-MiniLM-L6-v2 via sentence-transformers.
+    Cloud mode: Gemini text-embedding-004 with 384-dim output —
+    compatible with the existing vector(384) Supabase schema.
     """
-    return _get_embedder().encode(text).tolist()
+    if settings.USE_LOCAL_MODELS:
+        return _get_embedder().encode(text).tolist()
+    result = _gemini_client.models.embed_content(
+        model=_GEMINI_EMBEDDING_MODEL,
+        contents=text,
+        config=types.EmbedContentConfig(output_dimensionality=384),
+    )
+    return list(result.embeddings[0].values)
 
 
 def get_rag_context(dream_text: str) -> str:
@@ -411,7 +473,7 @@ def _local_entity_fallback(text: str) -> dict:
         if pattern.search(text)
     ]
 
-    if not symbols:
+    if not symbols and settings.USE_LOCAL_MODELS and _nlp is not None:
         doc = _nlp(text)
         symbols = [
             chunk.text.strip()

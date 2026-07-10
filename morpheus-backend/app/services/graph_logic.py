@@ -2,12 +2,21 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from app.database import supabase
+from app.config import settings
 
-_embedder = SentenceTransformer("all-MiniLM-L6-v2")
+if settings.USE_LOCAL_MODELS:
+    from sentence_transformers import SentenceTransformer as _SentenceTransformer
+    from sklearn.metrics.pairwise import cosine_similarity as _cosine_similarity
+
+_embedder = None
+
+
+def _get_graph_embedder():
+    global _embedder
+    if _embedder is None:
+        _embedder = _SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
 
 EMOTION_COLORS: dict[str, str] = {
     "fear":        "#C0392B",
@@ -163,15 +172,33 @@ def build_graph_data(user_id: str) -> dict:
         keyword_links.append({"source": f"dream-{did}", "target": knode_id, "type": "dream_keyword"})
 
     if len(keyword_node_names) >= 2:
-        embeddings = _embedder.encode(keyword_node_names)
-        sim = cosine_similarity(embeddings)
-        for i, src in enumerate(keyword_node_names):
-            for j in range(i + 1, len(keyword_node_names)):
-                if src == keyword_node_names[j]:
-                    continue
-                if sim[i][j] < 0.65:
-                    continue
-                keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
+        if settings.USE_LOCAL_MODELS:
+            embedder = _get_graph_embedder()
+            embeddings = embedder.encode(keyword_node_names)
+            sim = _cosine_similarity(embeddings)
+            for i, src in enumerate(keyword_node_names):
+                for j in range(i + 1, len(keyword_node_names)):
+                    if src == keyword_node_names[j]:
+                        continue
+                    if sim[i][j] < 0.65:
+                        continue
+                    keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
+        else:
+            from app.services.ai_service import generate_embedding
+            import math
+            embs = [generate_embedding(name) for name in keyword_node_names]
+            for i, src in enumerate(keyword_node_names):
+                for j in range(i + 1, len(keyword_node_names)):
+                    if src == keyword_node_names[j]:
+                        continue
+                    a, b = embs[i], embs[j]
+                    dot = sum(x * y for x, y in zip(a, b))
+                    norm_a = math.sqrt(sum(x * x for x in a))
+                    norm_b = math.sqrt(sum(x * x for x in b))
+                    cos_sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+                    if cos_sim < 0.65:
+                        continue
+                    keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
 
     # --- emotion links ---
     emotion_links = []
