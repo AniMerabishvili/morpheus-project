@@ -388,8 +388,8 @@ def get_user_history(user_id: str, limit: int = 5) -> str:
 
 class DreamEntities(BaseModel):
     title: str = Field(description="Short evocative dream title, max 6 words, in the same language as the dream text.")
-    symbols: list[str] = Field(description="Key Jungian symbols from the dream.")
-    emotions: list[str] = Field(description="Dominant emotions in the dream.")
+    symbols: list[str] = Field(description="Key Jungian symbols from the dream, translated to English.")
+    emotions: list[str] = Field(description="Dominant emotions in the dream, translated to English.")
     summary: str = Field(description="One sentence summary of the dream.")
 
 
@@ -403,10 +403,15 @@ no markdown, no backticks, no explanation, no extra text.
 Required schema (all fields mandatory):
 {{
   "title": "short evocative dream title (max 6 words, written in the SAME language as the Dream text — Georgian if the dream is in Georgian, English if the dream is in English)",
-  "symbols": ["list", "of", "key", "symbols"],
-  "emotions": ["list", "of", "dominant", "emotions"],
+  "symbols": ["list", "of", "key", "symbols", "always", "in", "English"],
+  "emotions": ["list", "of", "dominant", "emotions", "always", "in", "English"],
   "summary": "one sentence summary of the dream"
 }}
+
+Rules:
+- Always return symbols and emotions in English, even when the Dream is written in Georgian or another language.
+- Use short lowercase noun phrases for symbols, e.g. "full moon", "twin sister", "black dog".
+- Do not mix languages inside the symbols or emotions arrays.
 
 Dream:
 {text}"""

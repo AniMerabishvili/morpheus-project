@@ -39,36 +39,29 @@ EMOTION_COLORS: dict[str, str] = {
     "uncertainty": "#95A5A6",
 }
 DEFAULT_DREAM_COLOR = "#FFDE6E"
-GENERIC_KEYWORD_TOKENS = {
+KEYWORD_STOPWORDS = {
     "a",
     "an",
     "and",
-    "at",
-    "in",
-    "into",
     "of",
-    "on",
     "the",
-    "to",
     "with",
-    "black",
-    "white",
-    "red",
-    "blue",
-    "green",
-    "yellow",
-    "brown",
-    "grey",
-    "gray",
-    "dark",
-    "light",
 }
+KEYWORD_PREPOSITIONS = {"at", "in", "into", "of", "on", "to", "with"}
+
+
+def _core_keyword_phrase(name: str) -> str:
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    for index, word in enumerate(words):
+        if word in KEYWORD_PREPOSITIONS:
+            return " ".join(words[:index])
+    return " ".join(words)
 
 
 def _keyword_tokens(name: str) -> set[str]:
     tokens = set()
-    for token in re.findall(r"[a-z0-9]+", name.lower()):
-        if token in GENERIC_KEYWORD_TOKENS:
+    for token in re.findall(r"[a-z0-9]+", _core_keyword_phrase(name)):
+        if token in KEYWORD_STOPWORDS:
             continue
         if len(token) > 3 and token.endswith("s"):
             token = token[:-1]
@@ -77,7 +70,17 @@ def _keyword_tokens(name: str) -> set[str]:
 
 
 def _has_meaningful_keyword_overlap(left: str, right: str) -> bool:
-    return bool(_keyword_tokens(left) & _keyword_tokens(right))
+    left_tokens = _keyword_tokens(left)
+    right_tokens = _keyword_tokens(right)
+    for left_token in left_tokens:
+        for right_token in right_tokens:
+            if left_token == right_token:
+                return True
+            if len(left_token) >= 3 and right_token.startswith(left_token):
+                return True
+            if len(right_token) >= 3 and left_token.startswith(right_token):
+                return True
+    return False
 
 
 def _emotion_color(emotions: list) -> str:
@@ -94,7 +97,7 @@ def normalize_keyword_name(name: Optional[str]) -> str:
     return name.strip().lower()
 
 
-def _cosine_similarity(left: list[float], right: list[float]) -> float:
+def _vector_cosine_similarity(left: list[float], right: list[float]) -> float:
     dot = sum(x * y for x, y in zip(left, right))
     norm_left = math.sqrt(sum(x * x for x in left))
     norm_right = math.sqrt(sum(x * x for x in right))
@@ -248,7 +251,7 @@ def build_graph_data(user_id: str) -> dict:
                     if src == dst:
                         continue
                     a, b = embs[i], embs[j]
-                    cos_sim = _cosine_similarity(a, b)
+                    cos_sim = _vector_cosine_similarity(a, b)
                     if not _should_link_cloud_keywords(src, dst, cos_sim):
                         continue
                     keyword_links.append({"source": src, "target": dst, "type": "similar"})
