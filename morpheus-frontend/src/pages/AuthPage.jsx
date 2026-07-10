@@ -28,7 +28,12 @@ function AuthPage() {
       }
       const { data, error } = mode === 'signIn'
         ? await supabase.auth.signInWithPassword(credentials)
-        : await supabase.auth.signUp(credentials)
+        : await supabase.auth.signUp({
+          ...credentials,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth`,
+          },
+        })
 
       if (error) {
         throw error
