@@ -295,17 +295,17 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
 
       {/* Emotion color legend */}
       {!isLoading && !errorMessage && emotionLegend.length > 0 ? (
-        <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-1.5 rounded-lg border border-[#1f1f1f] bg-[#141414]/90 p-3">
-          <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-[#8A7129]">
+        <div className="absolute left-4 right-4 top-2 z-20 flex gap-1.5 overflow-x-auto py-1 md:top-4 md:right-auto md:max-h-[min(42vh,22rem)] md:min-w-52 md:flex-col md:gap-1.5 md:overflow-x-hidden md:overflow-y-auto md:rounded-lg md:border md:border-[#1f1f1f] md:bg-[#141414]/90 md:p-3 md:backdrop-blur-md">
+          <p className="hidden flex-shrink-0 px-1 text-[10px] font-black uppercase tracking-widest text-[#8A7129] md:mb-1 md:block md:px-0">
             Emotions
           </p>
           {emotionLegend.map(([label, color]) => (
-            <div key={label} className="flex items-center gap-2">
+            <div key={label} className="flex flex-shrink-0 items-center gap-1.5 rounded-full border border-[#1f1f1f] bg-[#141414]/80 px-2 py-1 backdrop-blur-md md:gap-2 md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-0 md:backdrop-blur-0">
               <span
-                className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                className="h-2 w-2 flex-shrink-0 rounded-full md:h-2.5 md:w-2.5"
                 style={{ background: color }}
               />
-              <span className="text-xs font-bold capitalize text-[#E6DFA9]">{label}</span>
+              <span className="text-[10px] font-bold capitalize text-[#E6DFA9] md:text-xs">{label}</span>
             </div>
           ))}
         </div>
