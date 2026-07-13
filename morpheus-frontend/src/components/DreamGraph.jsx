@@ -371,8 +371,8 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
 
       {/* Side panel */}
       <aside
-        className={`absolute bottom-16 right-0 top-20 z-40 w-full max-w-md transform border-l border-[#1f1f1f] bg-[#141414] p-4 shadow-2xl transition-transform duration-300 sm:w-[420px] sm:p-6 md:bottom-0 ${
-          selectedDream ? 'translate-x-0' : 'translate-x-full'
+        className={`fixed bottom-16 left-0 right-0 z-40 h-[72dvh] transform rounded-t-2xl border-t border-[#1f1f1f] bg-[#141414] p-5 shadow-2xl transition-transform duration-300 sm:p-6 md:bottom-0 md:left-auto md:top-[73px] md:h-auto md:w-[min(34rem,34vw)] md:rounded-none md:border-l md:border-t-0 ${
+          selectedDream ? 'translate-y-0 md:translate-x-0' : 'translate-y-[calc(100%+4rem)] md:translate-x-full md:translate-y-0'
         }`}
       >
         {selectedDream ? (
