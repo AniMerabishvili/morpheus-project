@@ -115,7 +115,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
         ) : null}
 
         {!isLoading && dreams.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {dreams.map((dream) => (
               <DreamCard
                 key={dream.id}
@@ -140,7 +140,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
 
 function SkeletonGrid() {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {Array.from({ length: 3 }).map((_, index) => (
         <div
           key={index}
@@ -215,14 +215,14 @@ function DreamCard({ dream, onOpen, onDelete }) {
   }
 
   return (
-    <article className="group min-h-52 rounded-xl border border-[#1f1f1f] bg-[#141414] p-5 transition hover:border-[#8A7129]">
+    <article className="group min-h-52 min-w-0 overflow-hidden rounded-xl border border-[#1f1f1f] bg-[#141414] p-5 transition hover:border-[#8A7129]">
       <div className="mb-3 flex items-start justify-between gap-3">
         <button
           type="button"
           onClick={onOpen}
           className="min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
         >
-          <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E]">
+          <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E] [overflow-wrap:anywhere]">
             {dream.title || 'Untitled Dream'}
           </h2>
         </button>
@@ -246,7 +246,7 @@ function DreamCard({ dream, onOpen, onDelete }) {
         <p className="mb-6 text-sm font-bold text-[#8A7129]">
           {relativeDate(dream.created_at)}
         </p>
-        <p className="leading-7 text-[#E6DFA9]">
+        <p className="leading-7 text-[#E6DFA9] [overflow-wrap:anywhere]">
           {truncateAnalysis(dream.analysis) || 'No analysis available yet.'}
         </p>
       </button>
@@ -294,12 +294,12 @@ function DreamModal({ dream, onClose }) {
       onClick={onClose}
     >
       <div
-        className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-[#1f1f1f] bg-[#141414] p-6 shadow-2xl"
+        className="max-h-[85vh] w-full min-w-0 max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto rounded-xl border border-[#1f1f1f] bg-[#141414] p-6 shadow-2xl sm:max-w-3xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h2 id="dream-modal-title" className="text-3xl font-semibold text-[#FFDE6E]">
+          <div className="min-w-0">
+            <h2 id="dream-modal-title" className="text-3xl font-semibold text-[#FFDE6E] [overflow-wrap:anywhere]">
               {dream.title || 'Untitled Dream'}
             </h2>
             <p className="mt-2 text-sm font-bold text-[#8A7129]">
@@ -318,14 +318,14 @@ function DreamModal({ dream, onClose }) {
         {dream.raw_text ? (
           <div className="mb-6">
             <p className="mb-2 text-sm font-bold text-[#8A7129]">Your dream</p>
-            <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9]">
+            <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9] [overflow-wrap:anywhere]">
               {dream.raw_text}
             </p>
           </div>
         ) : null}
         <div>
           <p className="mb-2 text-sm font-bold text-[#8A7129]">Analysis</p>
-          <p className="whitespace-pre-wrap text-lg leading-8 text-[#E6DFA9]">
+          <p className="whitespace-pre-wrap text-lg leading-8 text-[#E6DFA9] [overflow-wrap:anywhere]">
             {dream.analysis || 'No analysis available yet.'}
           </p>
         </div>
