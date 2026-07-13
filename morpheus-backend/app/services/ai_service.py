@@ -12,9 +12,9 @@ from google import genai
 from google.genai import types
 # from openai import OpenAI
 from pydantic import BaseModel, Field
+from supabase import Client
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
-from app.database import supabase
 from app.config import settings
 
 # ---------------------------------------------------------------------------
@@ -23,9 +23,13 @@ from app.config import settings
 # ---------------------------------------------------------------------------
 if settings.USE_LOCAL_MODELS:
     import spacy as _spacy_mod
-    from names_dataset import NameDataset as _NameDataset
     import whisper as _whisper_mod
     from sentence_transformers import SentenceTransformer as _SentenceTransformer
+
+try:
+    from names_dataset import NameDataset as _NameDataset
+except ImportError:  # pragma: no cover - optional fallback for constrained installs
+    _NameDataset = None
 
 # ---------------------------------------------------------------------------
 # Whisper — loaded lazily. Only used when USE_LOCAL_MODELS=True.
@@ -72,14 +76,20 @@ gemini_model = _GeminiModel()
 
 # ---------------------------------------------------------------------------
 # spaCy — local only. Loaded at startup when USE_LOCAL_MODELS=True.
-# In cloud mode, anonymize_text() falls back to regex-only PII removal.
+# NameDataset stays lazy and lightweight enough to use in cloud mode too.
 # ---------------------------------------------------------------------------
 _nlp = None
 _name_db = None
 
 if settings.USE_LOCAL_MODELS:
     _nlp = _spacy_mod.load("en_core_web_sm")
-    _name_db = _NameDataset()
+
+
+def _get_name_db():
+    global _name_db
+    if _name_db is None and _NameDataset is not None:
+        _name_db = _NameDataset()
+    return _name_db
 
 # ---------------------------------------------------------------------------
 # Sentence-transformers — 384-dim embeddings. Lazy, local only.
@@ -235,10 +245,47 @@ def _is_surname(word: str) -> bool:
       "Smith"   → first_best=580, last_best=1   → True   (redact)
       "Beridze" → first_best=755, last_best=1   → True   (redact)
     """
-    result = _name_db.search(word)
+    name_db = _get_name_db()
+    if name_db is None:
+        return False
+
+    result = name_db.search(word)
     first_best = _best_rank(result, "first_name")
     last_best = _best_rank(result, "last_name")
     return last_best < first_best
+
+
+def _is_likely_first_name(word: str) -> bool:
+    name_db = _get_name_db()
+    if name_db is None:
+        return False
+
+    result = name_db.search(word)
+    first_best = _best_rank(result, "first_name")
+    return first_best < 99999 and first_best <= _best_rank(result, "last_name")
+
+
+_RE_HONORIFIC_NAME = re.compile(
+    r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof)\.?\s+[A-Z][a-zA-Z'\-]{1,}\b"
+)
+_RE_LATIN_FULL_NAME = re.compile(
+    r"\b([A-Z][a-zA-Z'\-]{1,})\s+([A-Z][a-zA-Z'\-]{1,})(?:\s+[A-Z][a-zA-Z'\-]{1,})?\b"
+)
+
+
+def _redact_obvious_person_names(text: str) -> str:
+    """Redact obvious Latin-script personal names without sending text to a model."""
+
+    text = _RE_HONORIFIC_NAME.sub("[PERSON]", text)
+
+    def replace_full_name(match: re.Match) -> str:
+        first = match.group(1)
+        last = match.group(2)
+        if _is_likely_first_name(first) and _is_surname(last):
+            return f"{first} [SURNAME]"
+        return match.group(0)
+
+    return _RE_LATIN_FULL_NAME.sub(replace_full_name, text)
 
 
 def anonymize_text(text: str) -> str:
@@ -279,6 +326,9 @@ def anonymize_text(text: str) -> str:
         for start, end, placeholder in sorted(replacements, reverse=True):
             text = text[:start] + placeholder + text[end:]
 
+    # Runs in both cloud and local modes before third-party AI calls.
+    text = _redact_obvious_person_names(text)
+
     # Regex-based replacements always run regardless of mode.
     text = _RE_EMAIL.sub("[EMAIL]", text)
     text = _RE_PHONE.sub("[PHONE]", text)
@@ -308,7 +358,7 @@ def generate_embedding(text: str) -> list[float]:
     return list(result.embeddings[0].values)
 
 
-def get_rag_context(dream_text: str) -> str:
+def get_rag_context(db: Client, dream_text: str) -> str:
     """Retrieve the most relevant knowledge_base chunks for a dream.
 
     Uses the same all-MiniLM-L6-v2 384-dimensional embedding model as
@@ -316,7 +366,7 @@ def get_rag_context(dream_text: str) -> str:
     """
     query_embedding = generate_embedding(dream_text)
     response = (
-        supabase.rpc(
+        db.rpc(
             "match_documents",
             {
                 "query_embedding": query_embedding,
@@ -350,7 +400,7 @@ def get_rag_context(dream_text: str) -> str:
     return "\n\n".join(context_parts)
 
 
-def get_user_history(user_id: str, limit: int = 5) -> str:
+def get_user_history(db: Client, user_id: str, limit: int = 5) -> str:
     """Return a short digest of the user's most recent dream analyses for personalisation.
 
     Fetches the last `limit` dreams (excluding the one just saved, because this is called
@@ -358,7 +408,7 @@ def get_user_history(user_id: str, limit: int = 5) -> str:
     when the user has no prior history so the caller can skip the personalisation block.
     """
     response = (
-        supabase.table("dreams")
+        db.table("dreams")
         .select("title,analysis,created_at")
         .eq("user_id", user_id)
         .order("created_at", desc=True)

@@ -1,14 +1,18 @@
+import logging
 import os
 import tempfile
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from postgrest.exceptions import APIError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from supabase import Client
 
 from app.auth import get_current_user
-from app.database import get_user_supabase, supabase
+from app.config import settings
+from app.database import supabase_admin_only
+from app.security import client_safe_error, enforce_processing_rate_limit
 from app.services.ai_service import (
     anonymize_text,
     extract_entities,
@@ -20,19 +24,19 @@ from app.services.ai_service import (
 )
 
 router = APIRouter(prefix="/dreams", tags=["dreams"])
+logger = logging.getLogger(__name__)
 
 
 class TextDreamRequest(BaseModel):
-    dream_text: str
+    dream_text: str = Field(min_length=1, max_length=settings.MAX_DREAM_TEXT_CHARS)
 
 
 @router.get("")
 def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
     """Return saved dreams for the dreams list view."""
     response = (
-        supabase.table("dreams")
+        current_user.supabase.table("dreams")
         .select("id,title,raw_text,analysis,emotions,created_at")
-        .eq("user_id", current_user.id)
         .order("created_at", desc=True)
         .execute()
     )
@@ -43,10 +47,9 @@ def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
 def get_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     """Return a single dream only if it belongs to the authenticated user."""
     response = (
-        supabase.table("dreams")
+        current_user.supabase.table("dreams")
         .select("id,title,raw_text,analysis,emotions,created_at,user_id")
         .eq("id", dream_id)
-        .eq("user_id", current_user.id)
         .limit(1)
         .execute()
     )
@@ -64,10 +67,9 @@ def delete_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     This endpoint intentionally leaves the shared `keywords` table untouched.
     """
     response = (
-        supabase.table("dreams")
+        current_user.supabase.table("dreams")
         .select("id")
         .eq("id", dream_id)
-        .eq("user_id", current_user.id)
         .limit(1)
         .execute()
     )
@@ -75,31 +77,66 @@ def delete_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Dream not found.")
 
-    user_supabase = get_user_supabase(current_user.access_token)
     try:
         (
-            user_supabase.table("dreams")
+            current_user.supabase.table("dreams")
             .delete()
             .eq("id", dream_id)
-            .eq("user_id", current_user.id)
             .execute()
         )
     except APIError as exc:
         error = getattr(exc, "args", [{}])[0]
         if isinstance(error, dict) and error.get("code") == "42501":
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Supabase delete permission is missing for the dreams table. "
-                    "Grant DELETE on public.dreams to the authenticated role."
-                ),
-            ) from exc
+            raise client_safe_error("Unable to delete dream.") from exc
         raise
 
     return {"message": "Dream deleted successfully."}
 
 
+def _admin_only_get_or_create_keyword_id(symbol: str) -> str:
+    """Resolve the shared keyword dictionary with service-role privileges.
+
+    `keywords` is global deduplicated taxonomy data, not a user-owned table.
+    Keep this admin path tiny and never return arbitrary keyword lists through it.
+    """
+    existing = (
+        supabase_admin_only.table("keywords")
+        .select("id")
+        .eq("name", symbol)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]["id"]
+
+    try:
+        created = (
+            supabase_admin_only.table("keywords")
+            .insert({"name": symbol})
+            .execute()
+        )
+        if created.data:
+            return created.data[0]["id"]
+    except APIError as exc:
+        error = getattr(exc, "args", [{}])[0]
+        if not isinstance(error, dict) or error.get("code") != "23505":
+            raise
+
+    retry_existing = (
+        supabase_admin_only.table("keywords")
+        .select("id")
+        .eq("name", symbol)
+        .limit(1)
+        .execute()
+    )
+    if retry_existing.data:
+        return retry_existing.data[0]["id"]
+
+    raise RuntimeError("Keyword could not be resolved.")
+
+
 def save_dream(
+    db: Client,
     processed_text: str,
     entities: dict,
     user_id: str,
@@ -115,7 +152,7 @@ def save_dream(
 
     # 1. Insert the dream row.
     dream_row = (
-        supabase.table("dreams")
+        db.table("dreams")
         .insert(
             {
                 "user_id": user_id,
@@ -136,15 +173,9 @@ def save_dream(
         if not symbol:
             continue
 
-        # Upsert: insert if the name doesn't exist yet; do nothing on conflict.
-        keyword_row = (
-            supabase.table("keywords")
-            .upsert({"name": symbol}, on_conflict="name")
-            .execute()
-        )
-        keyword_id: str = keyword_row.data[0]["id"]
+        keyword_id = _admin_only_get_or_create_keyword_id(symbol)
 
-        supabase.table("dream_keywords").upsert(
+        db.table("dream_keywords").upsert(
             {"dream_id": dream_id, "keyword_id": keyword_id},
             on_conflict="dream_id,keyword_id",
         ).execute()
@@ -152,17 +183,17 @@ def save_dream(
     return dream_id
 
 
-def update_dream_analysis(dream_id: str, analysis: str) -> None:
+def update_dream_analysis(db: Client, dream_id: str, analysis: str) -> None:
     """Persist the generated analysis on the saved dream row."""
     (
-        supabase.table("dreams")
+        db.table("dreams")
         .update({"analysis": analysis})
         .eq("id", dream_id)
         .execute()
     )
 
 
-def process_text_pipeline(dream_text: str, user_id: str) -> dict:
+def process_text_pipeline(dream_text: str, current_user) -> dict:
     """Run the shared non-audio dream pipeline for English or Georgian text."""
     if not dream_text.strip():
         raise HTTPException(status_code=400, detail="dream_text cannot be empty.")
@@ -174,17 +205,17 @@ def process_text_pipeline(dream_text: str, user_id: str) -> dict:
     entities = extract_entities(anonymized_text)
 
     # 3. Embed + save to Supabase
-    dream_id = save_dream(anonymized_text, entities, user_id)
+    dream_id = save_dream(current_user.supabase, anonymized_text, entities, current_user.id)
 
     # 3b. Fetch user's prior dream history for personalised analysis
-    user_history = get_user_history(user_id)
+    user_history = get_user_history(current_user.supabase, current_user.id)
 
     # 4. Retrieve RAG context and generate language-matched analysis
-    rag_context = get_rag_context(anonymized_text)
+    rag_context = get_rag_context(current_user.supabase, anonymized_text)
     analysis = generate_analysis(anonymized_text, entities, rag_context, user_history)
 
     # 5. Update saved dream with final analysis
-    update_dream_analysis(dream_id, analysis)
+    update_dream_analysis(current_user.supabase, dream_id, analysis)
 
     return {
         "dream_id": dream_id,
@@ -220,9 +251,15 @@ async def process_dream(
 
     tmp_path: Optional[str] = None
     try:
+        enforce_processing_rate_limit(current_user.id)
         audio_bytes = await audio.read()
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        if len(audio_bytes) > settings.MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Uploaded file is too large.",
+            )
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(audio_bytes)
@@ -236,16 +273,14 @@ async def process_dream(
 
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(english_text, current_user.id),
+            content=process_text_pipeline(english_text, current_user),
         )
 
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Dream processing failed: {str(exc)}",
-        ) from exc
+        logger.exception("Dream processing failed for user %s", current_user.id)
+        raise client_safe_error("Dream processing failed.") from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -258,14 +293,13 @@ async def process_dream_text(
 ) -> JSONResponse:
     """Process an already-transcribed English or Georgian dream text."""
     try:
+        enforce_processing_rate_limit(current_user.id)
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(payload.dream_text, current_user.id),
+            content=process_text_pipeline(payload.dream_text, current_user),
         )
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Dream text processing failed: {str(exc)}",
-        ) from exc
+        logger.exception("Dream text processing failed for user %s", current_user.id)
+        raise client_safe_error("Dream text processing failed.") from exc

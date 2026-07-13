@@ -44,7 +44,6 @@ function AuthPage() {
         return
       }
 
-      localStorage.setItem('morpheus_session_token', data.session.access_token)
       navigate('/', { replace: true })
     } catch (error) {
       setErrorMessage(error.message || 'Authentication failed.')

@@ -1,27 +1,23 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Optional
 
 from fastapi import Header, HTTPException, status
+from supabase import Client
 
-from app.database import supabase_auth
-
-
-# Run this SQL in Supabase SQL Editor before enabling authenticated dream access:
-#
-# alter table dreams
-# add column if not exists user_id uuid references auth.users(id) on delete cascade;
-#
-# alter table dreams enable row level security;
-#
-# drop policy if exists "Users see own dreams" on dreams;
-# create policy "Users see own dreams" on dreams
-# for all
-# using (auth.uid() = user_id)
-# with check (auth.uid() = user_id);
+from app.database import get_user_supabase, supabase_auth
 
 
-def get_current_user(authorization: Optional[str] = Header(default=None)) -> Any:
-    """Validate a Supabase Auth bearer token and return the authenticated user."""
+@dataclass(frozen=True)
+class AuthenticatedUser:
+    id: str
+    email: Optional[str]
+    access_token: str
+    supabase: Client
+
+
+def get_current_user(authorization: Optional[str] = Header(default=None)) -> AuthenticatedUser:
+    """Validate a Supabase Auth token and attach an RLS-scoped DB client."""
     if not authorization:
         raise_unauthorized()
 
@@ -44,10 +40,11 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> Any
     if not user or not getattr(user, "id", None):
         raise_unauthorized()
 
-    return SimpleNamespace(
+    return AuthenticatedUser(
         id=user.id,
         email=getattr(user, "email", None),
         access_token=token,
+        supabase=get_user_supabase(token),
     )
 
 

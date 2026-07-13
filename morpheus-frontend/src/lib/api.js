@@ -11,7 +11,6 @@ function buildApiUrl(path) {
 }
 
 async function redirectToAuth() {
-  localStorage.removeItem('morpheus_session_token')
   await supabase.auth.signOut()
 
   if (window.location.pathname !== '/auth') {
@@ -24,7 +23,12 @@ export async function apiFetch(path, options = {}) {
     headers,
     ...fetchOptions
   } = options
-  const { data } = await supabase.auth.getSession()
+  const { data, error } = await supabase.auth.getSession()
+  if (error) {
+    await redirectToAuth()
+    throw new Error('Your session expired. Please sign in again.')
+  }
+
   const token = data.session?.access_token
 
   if (!token) {

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed frontend origins, e.g. https://morpheus-app.up.railway.app
     # Leave empty to allow all origins (development default).
     ALLOWED_ORIGINS: str = ""
+    MAX_DREAM_TEXT_CHARS: int = 20000
+    MAX_TEXT_REQUEST_BYTES: int = 262144
+    MAX_AUDIO_UPLOAD_BYTES: int = 10485760
+    PROCESS_RATE_LIMIT_REQUESTS: int = 5
+    PROCESS_RATE_LIMIT_WINDOW_SECONDS: int = 300
 
     model_config = SettingsConfigDict(
         env_file=".env",

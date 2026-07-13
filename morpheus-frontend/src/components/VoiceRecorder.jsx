@@ -662,7 +662,9 @@ const styles = {
     marginBottom: '24px',
   },
   modeButton: {
-    border: `1px solid ${BORDER}`,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: BORDER,
     borderRadius: '6px',
     background: '#101010',
     color: GOLD_PALE,

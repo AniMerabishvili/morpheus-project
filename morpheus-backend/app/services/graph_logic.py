@@ -4,8 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.database import supabase
 from app.config import settings
+from supabase import Client
 
 if settings.USE_LOCAL_MODELS:
     from sentence_transformers import SentenceTransformer as _SentenceTransformer
@@ -112,12 +112,11 @@ def _should_link_cloud_keywords(left: str, right: str, score: float) -> bool:
     return _has_meaningful_keyword_overlap(left, right)
 
 
-def build_graph_data(user_id: str) -> dict:
+def build_graph_data(db: Client, user_id: str) -> dict:
     """Build dream graph data supporting both keyword and emotion clustering."""
     dreams_response = (
-        supabase.table("dreams")
+        db.table("dreams")
         .select("id,title,created_at,emotions")
-        .eq("user_id", user_id)
         .execute()
     )
     dreams = dreams_response.data or []
@@ -132,7 +131,7 @@ def build_graph_data(user_id: str) -> dict:
         }
 
     links_response = (
-        supabase.table("dream_keywords")
+        db.table("dream_keywords")
         .select("dream_id,keyword_id")
         .in_("dream_id", dream_ids)
         .execute()
@@ -151,7 +150,7 @@ def build_graph_data(user_id: str) -> dict:
     keywords = []
     if keyword_ids:
         keywords = (
-            supabase.table("keywords")
+            db.table("keywords")
             .select("id,name")
             .in_("id", keyword_ids)
             .execute()
