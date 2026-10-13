@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react'
 
 import { apiFetch } from '../lib/api.js'
 
-function truncateAnalysis(text) {
-  const cleanText = String(text || '').trim()
-  if (cleanText.length <= 100) {
-    return cleanText
+function dateParts(value) {
+  const date = new Date(value)
+  if (!value || Number.isNaN(date.getTime())) {
+    return { day: '--', month: '' }
   }
-  return `${cleanText.slice(0, 100).trim()}...`
+
+  return {
+    day: String(date.getDate()).padStart(2, '0'),
+    month: date.toLocaleDateString(undefined, { month: 'short' }),
+  }
 }
 
 function relativeDate(value) {
@@ -142,17 +146,16 @@ function SkeletonGrid() {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {Array.from({ length: 3 }).map((_, index) => (
-        <div
-          key={index}
-          className="min-h-52 animate-pulse rounded-xl border border-[#1f1f1f] bg-[#141414] p-5"
-        >
-          <div className="mb-4 h-7 w-3/4 rounded bg-[#1f1f1f]" />
-          <div className="mb-8 h-4 w-24 rounded bg-[#1f1f1f]" />
-          <div className="space-y-3">
-            <div className="h-4 rounded bg-[#1f1f1f]" />
-            <div className="h-4 w-5/6 rounded bg-[#1f1f1f]" />
-            <div className="h-4 w-2/3 rounded bg-[#1f1f1f]" />
+        <div key={index} className="relative animate-pulse pt-5">
+          <div className="relative min-h-64 rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
+            <div className="space-y-3">
+              <div className="h-5 rounded bg-[#262626]" />
+              <div className="h-5 w-2/3 rounded bg-[#262626]" />
+            </div>
           </div>
+          <span className="absolute right-0 top-0 h-12 w-[52%] rounded-tl-[0.875rem] rounded-tr-[1.75rem] bg-[#1a1a1a]" />
+          <span className="absolute right-[52%] top-1 h-4 w-4 bg-[radial-gradient(circle_at_0_0,transparent_15.5px,#1a1a1a_16px)]" />
+          <div className="absolute right-7 top-8 z-10 h-8 w-20 rounded bg-[#262626]" />
         </div>
       ))}
     </div>
@@ -214,72 +217,78 @@ function DreamCard({ dream, onOpen, onDelete }) {
     }
   }
 
+  const { day, month } = dateParts(dream.created_at)
+
   return (
-    <article className="group min-h-52 min-w-0 overflow-hidden rounded-xl border border-[#1f1f1f] bg-[#141414] p-5 transition hover:border-[#8A7129]">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <button
-          type="button"
-          onClick={onOpen}
-          className="min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-        >
-          <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E] [overflow-wrap:anywhere]">
-            {dream.title || 'Untitled Dream'}
-          </h2>
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setIsConfirmingDelete(true)
-            setDeleteError('')
-          }}
-          className="rounded-md p-1.5 text-[#8A7129] opacity-0 transition hover:bg-[#1f1f1f] hover:text-[#FFDE6E] hover:opacity-100 group-hover:opacity-70 group-focus-within:opacity-70 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-          aria-label={`Delete ${dream.title || 'dream'}`}
-        >
-          <TrashIcon />
-        </button>
-      </div>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="block w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-      >
-        <p className="mb-6 text-sm font-bold text-[#8A7129]">
-          {relativeDate(dream.created_at)}
-        </p>
-        <p className="leading-7 text-[#E6DFA9] [overflow-wrap:anywhere]">
-          {truncateAnalysis(dream.analysis) || 'No analysis available yet.'}
-        </p>
-      </button>
-      {isConfirmingDelete ? (
-        <div className="mt-4">
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <button
-              type="button"
-              onClick={confirmDelete}
-              disabled={isDeleting}
-              className="font-black text-[#FFDE6E] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-            >
-              {isDeleting ? 'Deleting...' : 'Confirm'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsConfirmingDelete(false)
-                setDeleteError('')
-              }}
-              disabled={isDeleting}
-              className="font-bold text-[#8A7129] transition hover:text-[#E6DFA9] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-            >
-              Cancel
-            </button>
-          </div>
-          {deleteError ? (
-            <p className="mt-3 text-sm font-bold text-[#E6DFA9]">
-              {deleteError}
-            </p>
-          ) : null}
+    <article className="group relative min-w-0 pt-5 transition hover:-translate-y-0.5">
+      <div className="relative flex min-h-64 flex-col rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
+        <div className="mt-auto flex items-end justify-between gap-3">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+          >
+            <h2 className="line-clamp-3 text-lg font-bold leading-[1.35] text-[#F7F7F5] [overflow-wrap:anywhere]">
+              {dream.title || 'Untitled Dream'}
+            </h2>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsConfirmingDelete(true)
+              setDeleteError('')
+            }}
+            className="rounded-lg p-1.5 text-[#8E8E88] opacity-0 transition hover:bg-[#262626] hover:text-[#F7F7F5] group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+            aria-label={`Delete ${dream.title || 'dream'}`}
+          >
+            <TrashIcon />
+          </button>
         </div>
-      ) : null}
+
+        {isConfirmingDelete ? (
+          <div className="mt-5 border-t border-[#262626] pt-4">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                className="font-bold text-[#F7F7F5] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+              >
+                {isDeleting ? 'Deleting...' : 'Confirm'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsConfirmingDelete(false)
+                  setDeleteError('')
+                }}
+                disabled={isDeleting}
+                className="text-[#8E8E88] transition hover:text-[#F7F7F5] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+              >
+                Cancel
+              </button>
+            </div>
+            {deleteError ? (
+              <p className="mt-3 text-sm text-[#F7F7F5]">
+                {deleteError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute right-0 top-0 h-12 w-[52%] rounded-tl-[0.875rem] rounded-tr-[1.75rem] bg-[#1a1a1a]"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute right-[52%] top-1 h-4 w-4 bg-[radial-gradient(circle_at_0_0,transparent_15.5px,#1a1a1a_16px)]"
+      />
+      <p className="pointer-events-none absolute right-7 top-8 z-10 flex items-baseline gap-2">
+        <span className="text-3xl font-bold leading-none text-[#F7F7F5]">{day}</span>
+        <span className="text-sm text-[#8E8E88]">{month}</span>
+      </p>
     </article>
   )
 }

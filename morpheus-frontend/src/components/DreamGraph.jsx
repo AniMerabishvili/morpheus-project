@@ -342,7 +342,7 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
               (node.type === 'emotion' && node.is_dominant)
             if (showLabel) {
               const fontSize = Math.max(10, 13 / globalScale)
-              ctx.font = `700 ${fontSize}px sans-serif`
+              ctx.font = `700 ${fontSize}px "Helvetica Neue GEO", sans-serif`
               ctx.textAlign = 'center'
               ctx.textBaseline = 'top'
               ctx.fillStyle = '#FFDE6E'

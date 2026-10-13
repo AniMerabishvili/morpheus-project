@@ -105,7 +105,7 @@ function AuthPage() {
               onChange={(event) => setEmail(event.target.value)}
               required
               autoComplete="email"
-              placeholder="e.g. andrew@example.com"
+              placeholder="e.g. animagaria@example.com"
               className={inputClass}
             />
           </label>
