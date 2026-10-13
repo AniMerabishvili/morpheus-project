@@ -147,6 +147,8 @@ function SkeletonGrid() {
     <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {Array.from({ length: 3 }).map((_, index) => (
         <div key={index} className="relative animate-pulse pt-5">
+          <span className="absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520]" />
+          <span className="absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#38362F]" />
           <div className="relative min-h-64 rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
             <div className="space-y-3">
               <div className="h-5 rounded bg-[#262626]" />
@@ -221,24 +223,34 @@ function DreamCard({ dream, onOpen, onDelete }) {
 
   return (
     <article className="group relative min-w-0 pt-5 transition hover:-translate-y-0.5">
-      <div className="relative flex min-h-64 flex-col rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520] transition-transform duration-300 group-hover:-translate-y-1"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#38362F] transition-transform duration-300 group-hover:-translate-y-2"
+      />
+
+      <button
+        type="button"
+        onClick={onOpen}
+        className="absolute inset-0 rounded-[1.75rem] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+        aria-label={`Open ${dream.title || 'dream'}`}
+      />
+
+      <div className="pointer-events-none relative flex min-h-64 flex-col rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
         <div className="mt-auto flex items-end justify-between gap-3">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-          >
-            <h2 className="line-clamp-3 text-lg font-bold leading-[1.35] text-[#F7F7F5] [overflow-wrap:anywhere]">
-              {dream.title || 'Untitled Dream'}
-            </h2>
-          </button>
+          <h2 className="line-clamp-3 min-w-0 flex-1 text-lg font-bold leading-[1.35] text-[#F7F7F5] [overflow-wrap:anywhere]">
+            {dream.title || 'Untitled Dream'}
+          </h2>
           <button
             type="button"
             onClick={() => {
               setIsConfirmingDelete(true)
               setDeleteError('')
             }}
-            className="rounded-lg p-1.5 text-[#8E8E88] opacity-0 transition hover:bg-[#262626] hover:text-[#F7F7F5] group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+            className="pointer-events-auto rounded-lg p-1.5 text-[#8E8E88] opacity-0 transition hover:bg-[#262626] hover:text-[#F7F7F5] group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
             aria-label={`Delete ${dream.title || 'dream'}`}
           >
             <TrashIcon />
@@ -246,7 +258,7 @@ function DreamCard({ dream, onOpen, onDelete }) {
         </div>
 
         {isConfirmingDelete ? (
-          <div className="mt-5 border-t border-[#262626] pt-4">
+          <div className="pointer-events-auto mt-5 border-t border-[#262626] pt-4">
             <div className="flex flex-wrap items-center gap-4 text-sm">
               <button
                 type="button"
@@ -294,49 +306,74 @@ function DreamCard({ dream, onOpen, onDelete }) {
 }
 
 function DreamModal({ dream, onClose }) {
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose])
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f0f]/95 px-4 py-8"
+      className="letter-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f0f]/90 p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
       aria-labelledby="dream-modal-title"
       onClick={onClose}
     >
       <div
-        className="max-h-[85vh] w-full min-w-0 max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto rounded-xl border border-[#1f1f1f] bg-[#141414] p-6 shadow-2xl sm:max-w-3xl"
+        className="letter-sheet relative flex max-h-full w-full min-w-0 max-w-2xl flex-col rounded-sm border border-[#332F28] bg-[#1F1E1A] shadow-[0_30px_90px_rgba(0,0,0,0.75)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 id="dream-modal-title" className="text-3xl font-semibold text-[#FFDE6E] [overflow-wrap:anywhere]">
-              {dream.title || 'Untitled Dream'}
-            </h2>
-            <p className="mt-2 text-sm font-bold text-[#8A7129]">
-              {relativeDate(dream.created_at)}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-[#1f1f1f] px-3 py-2 font-bold text-[#E6DFA9] transition hover:border-[#8A7129] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
-            aria-label="Close dream analysis"
-          >
-            Close
-          </button>
-        </div>
-        {dream.raw_text ? (
-          <div className="mb-6">
-            <p className="mb-2 text-sm font-bold text-[#8A7129]">Your dream</p>
-            <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9] [overflow-wrap:anywhere]">
-              {dream.raw_text}
-            </p>
-          </div>
-        ) : null}
-        <div>
-          <p className="mb-2 text-sm font-bold text-[#8A7129]">Analysis</p>
-          <p className="whitespace-pre-wrap text-lg leading-8 text-[#E6DFA9] [overflow-wrap:anywhere]">
-            {dream.analysis || 'No analysis available yet.'}
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-[#1F1E1A] text-xl leading-none text-[#8A857A] transition hover:bg-[#2C2A24] hover:text-[#F2EDE1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A857A]"
+          aria-label="Close letter"
+        >
+          ×
+        </button>
+
+        <div className="min-h-0 overflow-y-auto px-7 py-9 sm:px-14 sm:py-14">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-[#8A857A]">
+            {relativeDate(dream.created_at)}
           </p>
+          <h2
+            id="dream-modal-title"
+            className="mt-3 text-2xl font-bold leading-snug text-[#F2EDE1] [overflow-wrap:anywhere] sm:text-3xl"
+          >
+            {dream.title || 'Untitled Dream'}
+          </h2>
+
+          {dream.raw_text ? (
+            <div className="mt-9">
+              <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[#8A857A]">
+                Your dream
+              </p>
+              <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#BDB9AE] [overflow-wrap:anywhere]">
+                {dream.raw_text}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="mt-9 border-t border-dashed border-[#352F28] pt-9">
+            <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[#8A857A]">
+              Interpretation
+            </p>
+            <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#E2DDD2] [overflow-wrap:anywhere]">
+              {dream.analysis || 'No analysis available yet.'}
+            </p>
+          </div>
         </div>
       </div>
     </div>
