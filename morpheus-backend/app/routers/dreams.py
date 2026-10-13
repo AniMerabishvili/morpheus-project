@@ -11,6 +11,7 @@ from supabase import Client
 
 from app.auth import get_current_user
 from app.config import settings
+from app.crypto import decrypt_dream_row, encrypt_field
 from app.database import supabase_admin_only
 from app.security import client_safe_error, enforce_processing_rate_limit
 from app.services.ai_service import (
@@ -40,7 +41,7 @@ def list_dreams(current_user=Depends(get_current_user)) -> list[dict]:
         .order("created_at", desc=True)
         .execute()
     )
-    return response.data or []
+    return [decrypt_dream_row(row) for row in (response.data or [])]
 
 
 @router.get("/{dream_id}")
@@ -56,7 +57,7 @@ def get_dream(dream_id: str, current_user=Depends(get_current_user)) -> dict:
     rows = response.data or []
     if not rows:
         raise HTTPException(status_code=404, detail="Dream not found.")
-    return rows[0]
+    return decrypt_dream_row(rows[0])
 
 
 @router.delete("/{dream_id}")
@@ -150,15 +151,15 @@ def save_dream(
     """
     embedding = generate_embedding(processed_text)
 
-    # 1. Insert the dream row.
+    # 1. Insert the dream row — sensitive text fields are encrypted at rest.
     dream_row = (
         db.table("dreams")
         .insert(
             {
                 "user_id": user_id,
-                "title": entities.get("title", "Untitled Dream"),
-                "raw_text": processed_text,
-                "analysis": entities.get("summary", ""),
+                "title": encrypt_field(entities.get("title", "Untitled Dream")),
+                "raw_text": encrypt_field(processed_text),
+                "analysis": encrypt_field(entities.get("summary", "")),
                 "embedding": embedding,
                 "emotions": entities.get("emotions", []),
             }
@@ -184,10 +185,10 @@ def save_dream(
 
 
 def update_dream_analysis(db: Client, dream_id: str, analysis: str) -> None:
-    """Persist the generated analysis on the saved dream row."""
+    """Persist the generated analysis on the saved dream row (encrypted)."""
     (
         db.table("dreams")
-        .update({"analysis": analysis})
+        .update({"analysis": encrypt_field(analysis)})
         .eq("id", dream_id)
         .execute()
     )

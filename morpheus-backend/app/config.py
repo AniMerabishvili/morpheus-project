@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,10 +15,21 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
     WHISPER_MODEL: str = "medium"
-    # True  → load Whisper/spaCy/sentence-transformers locally (Mac dev)
-    # False → use Gemini APIs for transcription & embeddings (Railway cloud)
+    # True  → load Whisper/spaCy/sentence-transformers locally (dev only)
+    # False → use cloud APIs for transcription & embeddings (production)
     USE_LOCAL_MODELS: bool = False
-    # Comma-separated list of allowed frontend origins, e.g. https://morpheus-app.up.railway.app
+    # Transcription provider when USE_LOCAL_MODELS=False:
+    #   "groq"   → Groq Whisper large-v3 (recommended: best quality, free, fast)
+    #   "gemini" → Gemini inline audio (fallback when no GROQ_API_KEY)
+    WHISPER_PROVIDER: str = "groq"
+    # Groq API key — required when WHISPER_PROVIDER=groq.
+    # Get a free key at console.groq.com (no credit card needed).
+    GROQ_API_KEY: Optional[str] = None
+    # Field-level encryption key for sensitive dream columns (raw_text, analysis, title).
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # If unset, fields are stored as plaintext (safe for local dev; always set in production).
+    DREAM_ENCRYPTION_KEY: Optional[str] = None
+    # Comma-separated list of allowed frontend origins, e.g. https://morpheus-app.vercel.app
     # Leave empty to allow all origins (development default).
     ALLOWED_ORIGINS: str = ""
     MAX_DREAM_TEXT_CHARS: int = 20000

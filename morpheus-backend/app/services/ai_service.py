@@ -145,8 +145,33 @@ def _transcribe_local(audio_path: str) -> dict:
             os.remove(wav_path)
 
 
+def _transcribe_groq(audio_path: str) -> dict:
+    """Transcribe and translate to English using Groq Whisper large-v3.
+
+    Uses the /audio/translations endpoint which always outputs English,
+    matching the behaviour of Whisper's task='translate' in local mode.
+    Supports Georgian, Russian, and all other Whisper languages.
+    File size limit: 25 MB (Groq hard limit).
+    """
+    try:
+        from groq import Groq  # lazy import — not needed in local mode
+        client = Groq(api_key=settings.GROQ_API_KEY)
+        filename = os.path.basename(audio_path)
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+        result = client.audio.translations.create(
+            file=(filename, audio_bytes),
+            model="whisper-large-v3",
+            response_format="text",
+        )
+        return {"english_text": str(result).strip()}
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+
 def _transcribe_gemini(audio_path: str) -> dict:
-    """Transcribe using Gemini's audio API (cloud mode, no ffmpeg needed)."""
+    """Transcribe using Gemini's audio API (fallback when no Groq key)."""
     try:
         ext = os.path.splitext(audio_path)[1].lower()
         mime_map = {
@@ -184,13 +209,21 @@ def _transcribe_gemini(audio_path: str) -> dict:
 def transcribe_audio(audio_path: str) -> dict:
     """Transcribe audio and return English text.
 
-    Local mode: Whisper with ffmpeg pre-processing, any language → English.
-    Cloud mode: audio sent inline to Gemini, which transcribes and translates.
-    Returns:
-        {"english_text": str}
+    Routing priority:
+      1. USE_LOCAL_MODELS=true  → local Whisper + ffmpeg (dev only, needs ~2 GB RAM)
+      2. WHISPER_PROVIDER=groq  → Groq Whisper large-v3 API (recommended for production)
+      3. fallback               → Gemini inline audio API
+
+    All paths produce {"english_text": str} with any language translated to English.
     """
     if settings.USE_LOCAL_MODELS:
         return _transcribe_local(audio_path)
+    if settings.WHISPER_PROVIDER == "groq" and settings.GROQ_API_KEY:
+        return _transcribe_groq(audio_path)
+    logger.warning(
+        "WHISPER_PROVIDER=groq but GROQ_API_KEY is not set — falling back to Gemini transcription. "
+        "Get a free key at console.groq.com"
+    )
     return _transcribe_gemini(audio_path)
 
 
