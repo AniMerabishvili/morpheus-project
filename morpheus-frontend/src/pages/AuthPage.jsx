@@ -157,7 +157,7 @@ function AuthPage() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className={`mt-[clamp(0.25rem,1vh,0.5rem)] ${fieldHeight} w-full rounded-xl bg-[#C7D8A6] text-sm font-medium text-[#14160f] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C7D8A6] disabled:cursor-not-allowed disabled:opacity-60`}
+            className={`mt-[clamp(0.25rem,1vh,0.5rem)] ${fieldHeight} w-full rounded-xl bg-[#F8ED76] text-sm font-medium text-[#14160f] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F8ED76] disabled:cursor-not-allowed disabled:opacity-60`}
           >
             {isSubmitting ? 'Working...' : text.submit}
           </button>
@@ -168,7 +168,7 @@ function AuthPage() {
           <button
             type="button"
             onClick={switchMode}
-            className="font-medium text-[#F4F4F1] transition hover:text-[#C7D8A6]"
+            className="font-medium text-[#F4F4F1] transition hover:text-[#F8ED76]"
           >
             {text.switchAction}
           </button>
