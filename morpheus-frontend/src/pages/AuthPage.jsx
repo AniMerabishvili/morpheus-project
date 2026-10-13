@@ -3,9 +3,23 @@ import { useNavigate } from 'react-router-dom'
 
 import { supabase } from '../lib/supabase.js'
 
-const modes = {
-  signIn: 'Sign In',
-  signUp: 'Sign Up',
+const fieldHeight = 'h-[clamp(2.5rem,5.4vh,3rem)]'
+const labelClass = 'mb-[clamp(0.25rem,0.9vh,0.5rem)] block text-sm text-[#A6A69D]'
+const inputClass = `${fieldHeight} w-full rounded-xl border border-[#2a2a27] bg-[#121212] px-4 text-sm text-[#F4F4F1] outline-none transition placeholder:text-[#5f5f58] focus:border-[#C7D8A6]`
+
+const copy = {
+  signIn: {
+    heading: 'Welcome back',
+    submit: 'Sign in',
+    switchPrompt: "Don't have an account?",
+    switchAction: 'Sign Up',
+  },
+  signUp: {
+    heading: 'Create your account',
+    submit: 'Create account',
+    switchPrompt: 'Already have an account?',
+    switchAction: 'Sign In',
+  },
 }
 
 function AuthPage() {
@@ -13,12 +27,30 @@ function AuthPage() {
   const [mode, setMode] = useState('signIn')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false)
+  const [isConfirmVisible, setIsConfirmVisible] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const isSignUp = mode === 'signUp'
+  const text = copy[mode]
+
+  function switchMode() {
+    setMode(isSignUp ? 'signIn' : 'signUp')
+    setErrorMessage('')
+    setConfirmPassword('')
+  }
 
   async function handleSubmit(event) {
     event.preventDefault()
     setErrorMessage('')
+
+    if (isSignUp && password !== confirmPassword) {
+      setErrorMessage('Passwords do not match.')
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -26,14 +58,14 @@ function AuthPage() {
         email: email.trim(),
         password,
       }
-      const { data, error } = mode === 'signIn'
-        ? await supabase.auth.signInWithPassword(credentials)
-        : await supabase.auth.signUp({
+      const { data, error } = isSignUp
+        ? await supabase.auth.signUp({
           ...credentials,
           options: {
             emailRedirectTo: `${window.location.origin}/auth`,
           },
         })
+        : await supabase.auth.signInWithPassword(credentials)
 
       if (error) {
         throw error
@@ -53,61 +85,71 @@ function AuthPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#0f0f0f] px-4 py-10 text-[#E6DFA9]">
-      <section className="w-full max-w-md">
-        <div className="mb-10 text-center">
-          <p className="mb-3 text-5xl font-black leading-none text-[#FFDE6E]">✦ Morpheus</p>
-          <p className="text-lg font-semibold text-[#E6DFA9]">Your dreams, decoded</p>
-        </div>
+    <main className="flex h-dvh items-center justify-center overflow-y-auto bg-[#0a0a0a] p-4 md:p-6">
+      <div className="w-full max-w-104 py-[clamp(0.5rem,2vh,1.5rem)]">
+        <h1 className="text-[1.75rem] leading-tight tracking-tight text-[#F4F4F1]">
+          {text.heading}
+        </h1>
 
-        <div className="mb-5 grid grid-cols-2 gap-2 rounded-lg border border-[#1f1f1f] bg-[#141414] p-1">
-          {Object.entries(modes).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => {
-                setMode(key)
-                setErrorMessage('')
-              }}
-              className={`rounded-md px-4 py-3 text-sm font-black transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E] ${
-                mode === key
-                  ? 'bg-[#FFDE6E] text-[#0f0f0f]'
-                  : 'text-[#E6DFA9] hover:text-[#FFDE6E]'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          className="mt-[clamp(1rem,3.5vh,2rem)] space-y-[clamp(0.625rem,2vh,1.25rem)]"
+        >
           <label className="block">
-            <span className="mb-2 block text-sm font-bold text-[#E6DFA9]">Email</span>
+            <span className={labelClass}>
+              Email address <span className="text-[#C7D8A6]">*</span>
+            </span>
             <input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
               autoComplete="email"
-              className="w-full rounded-lg border border-[#1f1f1f] bg-[#141414] px-4 py-3 text-[#E6DFA9] outline-none transition placeholder:text-[#8A7129] focus:border-[#FFDE6E]"
+              placeholder="e.g. andrew@example.com"
+              className={inputClass}
             />
           </label>
 
-          <label className="block">
-            <span className="mb-2 block text-sm font-bold text-[#E6DFA9]">Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              minLength={6}
-              autoComplete={mode === 'signIn' ? 'current-password' : 'new-password'}
-              className="w-full rounded-lg border border-[#1f1f1f] bg-[#141414] px-4 py-3 text-[#E6DFA9] outline-none transition placeholder:text-[#8A7129] focus:border-[#FFDE6E]"
-            />
-          </label>
+          <div
+            className={`grid gap-[clamp(0.625rem,2vh,1rem)] ${isSignUp ? 'sm:grid-cols-2' : ''}`}
+          >
+            <label className="block">
+              <span className={labelClass}>Password</span>
+              <PasswordInput
+                value={password}
+                onChange={setPassword}
+                isVisible={isPasswordVisible}
+                onToggleVisible={() => setIsPasswordVisible((visible) => !visible)}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                minLength={isSignUp ? 8 : undefined}
+                label="password"
+              />
+            </label>
+
+            {isSignUp ? (
+              <label className="block">
+                <span className={labelClass}>Confirm password</span>
+                <PasswordInput
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  isVisible={isConfirmVisible}
+                  onToggleVisible={() => setIsConfirmVisible((visible) => !visible)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  label="password confirmation"
+                />
+              </label>
+            ) : null}
+          </div>
+
+          {isSignUp ? (
+            <p className="text-xs leading-relaxed text-[#6b6b64]">
+              Password must be at least 8 characters, including a number and a special character.
+            </p>
+          ) : null}
 
           {errorMessage ? (
-            <p className="rounded-lg border border-[#5c2b2b] bg-[#2a1515] px-4 py-3 text-sm font-bold text-[#C96F6F]">
+            <p className="rounded-xl border border-[#4a2626] bg-[#1d1212] px-4 py-3 text-sm text-[#D08A8A]">
               {errorMessage}
             </p>
           ) : null}
@@ -115,13 +157,63 @@ function AuthPage() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full rounded-lg border border-[#FFDE6E] bg-[#FFDE6E] px-4 py-3 font-black text-[#0f0f0f] transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E] disabled:cursor-not-allowed disabled:opacity-60"
+            className={`mt-[clamp(0.25rem,1vh,0.5rem)] ${fieldHeight} w-full rounded-xl bg-[#C7D8A6] text-sm font-medium text-[#14160f] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C7D8A6] disabled:cursor-not-allowed disabled:opacity-60`}
           >
-            {isSubmitting ? 'Working...' : modes[mode]}
+            {isSubmitting ? 'Working...' : text.submit}
           </button>
         </form>
-      </section>
+
+        <p className="mt-[clamp(0.75rem,2.5vh,1.75rem)] text-center text-sm text-[#86867E]">
+          {text.switchPrompt}{' '}
+          <button
+            type="button"
+            onClick={switchMode}
+            className="font-medium text-[#F4F4F1] transition hover:text-[#C7D8A6]"
+          >
+            {text.switchAction}
+          </button>
+        </p>
+      </div>
     </main>
+  )
+}
+
+function PasswordInput({ value, onChange, isVisible, onToggleVisible, autoComplete, minLength, label }) {
+  return (
+    <span className="relative block">
+      <input
+        type={isVisible ? 'text' : 'password'}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required
+        minLength={minLength}
+        autoComplete={autoComplete}
+        placeholder="••••••••••••"
+        className={`${inputClass} pr-11`}
+      />
+      <button
+        type="button"
+        onClick={onToggleVisible}
+        aria-label={`${isVisible ? 'Hide' : 'Show'} ${label}`}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6b6b64] transition hover:text-[#A6A69D]"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="2.75" />
+          {isVisible ? <path d="M4 20 20 4" /> : null}
+        </svg>
+      </button>
+    </span>
   )
 }
 
