@@ -74,18 +74,7 @@ textarea:focus-visible {
   min-height: 100vh;
 }
 
-@keyframes letter-fade {
-  from {
-    opacity: 0;
-  }
-}
-
-.letter-backdrop {
-  animation: letter-fade 220ms ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .letter-backdrop {
-    animation: none;
-  }
+.letter-sheet {
+  transform-origin: top center;
+  backface-visibility: hidden;
 }

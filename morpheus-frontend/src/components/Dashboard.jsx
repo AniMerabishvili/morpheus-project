@@ -98,8 +98,8 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
       method: 'DELETE',
     })
     setDreams((currentDreams) => currentDreams.filter((dream) => dream.id !== dreamId))
-    setSelectedDream((currentDream) => (
-      currentDream?.id === dreamId ? null : currentDream
+    setSelectedDream((current) => (
+      current?.dream?.id === dreamId ? null : current
     ))
   }
 
@@ -124,6 +124,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
               <DreamCard
                 key={dream.id}
                 dream={dream}
+                isOpen={selectedDream?.dream.id === dream.id}
                 onOpen={(letterRect) => setSelectedDream({ dream, letterRect })}
                 onDelete={handleDeleteDream}
               />
@@ -149,7 +150,7 @@ function SkeletonGrid() {
       {Array.from({ length: 3 }).map((_, index) => (
         <div key={index} className="relative animate-pulse pt-5">
           <span className="absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520]" />
-          <span className="absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#38362F]" />
+          <span className="absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#1F1E1A]" />
           <div className="relative min-h-64 rounded-[1.75rem] bg-[#1a1a1a] px-11 pb-8 pt-18">
             <div className="space-y-3">
               <div className="h-5 rounded bg-[#262626]" />
@@ -203,7 +204,7 @@ function TrashIcon() {
   )
 }
 
-function DreamCard({ dream, onOpen, onDelete }) {
+function DreamCard({ dream, isOpen = false, onOpen, onDelete }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
@@ -227,12 +228,16 @@ function DreamCard({ dream, onOpen, onDelete }) {
     <article className="group relative min-w-0 pt-5 transition hover:-translate-y-0.5">
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520] transition-transform duration-300 group-hover:-translate-y-1"
+        className={`pointer-events-none absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520] transition duration-300 group-hover:-translate-y-1 ${
+          isOpen ? 'opacity-0' : ''
+        }`}
       />
       <span
         ref={letterRef}
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#38362F] transition-transform duration-300 group-hover:-translate-y-2"
+        className={`pointer-events-none absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#1F1E1A] transition duration-300 group-hover:-translate-y-2 ${
+          isOpen ? 'opacity-0' : ''
+        }`}
       />
 
       <button
@@ -308,82 +313,143 @@ function DreamCard({ dream, onOpen, onDelete }) {
   )
 }
 
+function letterTransform(letterRect, target) {
+  if (!letterRect || !target.width || !target.height) {
+    return 'translateY(28px) scale(0.92)'
+  }
+
+  const scaleX = letterRect.width / target.width
+  const scaleY = letterRect.height / target.height
+  const dx = letterRect.left + letterRect.width / 2 - (target.left + target.width / 2)
+  const dy = letterRect.top - target.top
+  return `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})`
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 function DreamModal({ dream, letterRect, onClose }) {
   const sheetRef = useRef(null)
   const contentRef = useRef(null)
+  const backdropRef = useRef(null)
+  const closingRef = useRef(false)
 
-  // Slide the sheet out of the folder from where the card's letter sat, then unfold it.
   useLayoutEffect(() => {
     const sheet = sheetRef.current
     const content = contentRef.current
-    if (!sheet || !content) {
+    const backdrop = backdropRef.current
+    if (!sheet || !content || !backdrop) {
       return
     }
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (prefersReducedMotion()) {
       return
     }
 
-    const duration = 720
-    const slideOut = 'cubic-bezier(0.33, 0, 0.67, 1)'
-    const unfold = 'cubic-bezier(0.22, 1, 0.36, 1)'
-    const target = sheet.getBoundingClientRect()
-    const sheetFrames = []
+    const from = letterTransform(letterRect, sheet.getBoundingClientRect())
+    const duration = 820
+    const easing = 'cubic-bezier(0.16, 1, 0.3, 1)'
 
-    if (letterRect && target.width > 0 && target.height > 0) {
-      const scaleX = letterRect.width / target.width
-      const scaleY = letterRect.height / target.height
-      const dx =
-        letterRect.left + letterRect.width / 2 - (target.left + target.width / 2)
-      const dy = letterRect.top - target.top
-      // Keep the strip on screen for cards sitting near the top of the viewport.
-      const slideDy = Math.max(8, letterRect.top - 44) - target.top
-
-      sheetFrames.push(
-        {
-          offset: 0,
-          transform: `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})`,
-          borderRadius: '0.5rem 0.5rem 0 0',
-          easing: slideOut,
-        },
-        {
-          offset: 0.34,
-          transform: `translate(${dx}px, ${slideDy}px) scale(${scaleX}, ${scaleY})`,
-          borderRadius: '0.5rem 0.5rem 0 0',
-          easing: unfold,
-        },
-        { offset: 1, transform: 'none', borderRadius: '0.125rem' },
-      )
-    } else {
-      sheetFrames.push(
-        { offset: 0, transform: 'translateY(2rem) scaleY(0.88)', opacity: 0, easing: unfold },
-        { offset: 1, transform: 'none', opacity: 1 },
-      )
+    const scroller = content.querySelector('[data-letter-scroll]')
+    sheet.style.overflow = 'hidden'
+    sheet.style.willChange = 'transform'
+    if (scroller) {
+      scroller.style.overflow = 'hidden'
     }
 
-    const sheetAnimation = sheet.animate(sheetFrames, {
-      duration,
-      easing: 'linear',
-      fill: 'both',
-    })
+    const sheetAnimation = sheet.animate(
+      [
+        { transform: from },
+        { transform: 'none' },
+      ],
+      { duration, easing, fill: 'both' },
+    )
     const contentAnimation = content.animate(
       [
-        { offset: 0, opacity: 0 },
-        { offset: 0.52, opacity: 0 },
-        { offset: 1, opacity: 1 },
+        { opacity: 0 },
+        { opacity: 0, offset: 0.62 },
+        { opacity: 1 },
       ],
-      { duration, easing: 'linear', fill: 'both' },
+      { duration, easing: 'ease-out', fill: 'both' },
     )
+    const backdropAnimation = backdrop.animate(
+      [
+        { opacity: 0 },
+        { opacity: 1 },
+      ],
+      { duration: 500, easing: 'ease-out', fill: 'both' },
+    )
+
+    sheetAnimation.finished
+      .then(() => {
+        sheet.style.overflow = ''
+        sheet.style.willChange = ''
+        if (scroller) {
+          scroller.style.overflow = ''
+        }
+      })
+      .catch(() => {})
 
     return () => {
       sheetAnimation.cancel()
       contentAnimation.cancel()
+      backdropAnimation.cancel()
     }
   }, [letterRect])
+
+  function finishClose() {
+    closingRef.current = false
+    onClose()
+  }
+
+  function handleClose() {
+    if (closingRef.current) {
+      return
+    }
+
+    const sheet = sheetRef.current
+    const content = contentRef.current
+    const backdrop = backdropRef.current
+    if (!sheet || prefersReducedMotion()) {
+      finishClose()
+      return
+    }
+
+    closingRef.current = true
+    sheet.getAnimations().forEach((animation) => animation.cancel())
+    content?.getAnimations().forEach((animation) => animation.cancel())
+    backdrop?.getAnimations().forEach((animation) => animation.cancel())
+
+    sheet.style.overflow = 'hidden'
+    const to = letterTransform(letterRect, sheet.getBoundingClientRect())
+    const duration = 460
+    const easing = 'cubic-bezier(0.4, 0, 1, 0.6)'
+
+    content?.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 160,
+      easing: 'ease-in',
+      fill: 'forwards',
+    })
+    backdrop?.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration,
+      easing: 'ease-in',
+      fill: 'forwards',
+    })
+    const closeAnimation = sheet.animate(
+      [{ transform: 'none' }, { transform: to }],
+      { duration, easing, fill: 'forwards' },
+    )
+
+    closeAnimation.finished.then(finishClose).catch(finishClose)
+  }
+
+  const handleCloseRef = useRef(handleClose)
+  handleCloseRef.current = handleClose
 
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
-        onClose()
+        handleCloseRef.current()
       }
     }
 
@@ -395,32 +461,33 @@ function DreamModal({ dream, letterRect, onClose }) {
       document.body.style.overflow = previousOverflow
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div
-      className="letter-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f0f]/90 p-4 sm:p-8"
+      ref={backdropRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f0f]/90 p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
       aria-labelledby="dream-modal-title"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         ref={sheetRef}
-        className="relative flex max-h-full w-full min-w-0 max-w-2xl origin-top flex-col rounded-sm border border-[#332F28] bg-[#1F1E1A] shadow-[0_30px_90px_rgba(0,0,0,0.75)]"
+        className="letter-sheet relative flex max-h-full w-full min-w-0 max-w-2xl flex-col rounded-sm border border-[#332F28] bg-[#1F1E1A] shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div ref={contentRef} className="flex min-h-0 flex-col">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-[#1F1E1A] text-xl leading-none text-[#8A857A] transition hover:bg-[#2C2A24] hover:text-[#F2EDE1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A857A]"
             aria-label="Close letter"
           >
             ×
           </button>
 
-          <div className="min-h-0 overflow-y-auto px-7 py-9 sm:px-14 sm:py-14">
+          <div data-letter-scroll className="min-h-0 overflow-y-auto px-7 py-9 sm:px-14 sm:py-14">
             <p className="text-[11px] uppercase tracking-[0.22em] text-[#8A857A]">
               {relativeDate(dream.created_at)}
             </p>
@@ -456,5 +523,8 @@ function DreamModal({ dream, letterRect, onClose }) {
     </div>
   )
 }
+
+export const DreamCardPreview = DreamCard
+export const DreamModalPreview = DreamModal
 
 export default Dashboard

@@ -6,6 +6,7 @@ import MainGraph from './components/MainGraph.jsx'
 import VoiceRecorder from './components/VoiceRecorder.jsx'
 import { useAuth } from './hooks/useAuth.js'
 import AuthPage from './pages/AuthPage.jsx'
+import CardPreview from './pages/CardPreview.jsx'
 
 function App() {
   return (
@@ -71,6 +72,10 @@ function AppShell() {
   async function handleSignOut() {
     await signOut()
     window.location.assign('/auth')
+  }
+
+  if (location.pathname === '/__card-preview') {
+    return <CardPreview />
   }
 
   if (loading) {
