@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { apiFetch } from '../lib/api.js'
 
@@ -124,7 +124,7 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
               <DreamCard
                 key={dream.id}
                 dream={dream}
-                onOpen={() => setSelectedDream(dream)}
+                onOpen={(letterRect) => setSelectedDream({ dream, letterRect })}
                 onDelete={handleDeleteDream}
               />
             ))}
@@ -134,7 +134,8 @@ function Dashboard({ onRecordDream, refreshKey = 0 }) {
 
       {selectedDream ? (
         <DreamModal
-          dream={selectedDream}
+          dream={selectedDream.dream}
+          letterRect={selectedDream.letterRect}
           onClose={() => setSelectedDream(null)}
         />
       ) : null}
@@ -206,6 +207,7 @@ function DreamCard({ dream, onOpen, onDelete }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const letterRef = useRef(null)
 
   async function confirmDelete() {
     setIsDeleting(true)
@@ -228,13 +230,14 @@ function DreamCard({ dream, onOpen, onDelete }) {
         className="pointer-events-none absolute inset-x-12 top-1 h-10 rounded-t-md bg-[#262520] transition-transform duration-300 group-hover:-translate-y-1"
       />
       <span
+        ref={letterRef}
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-8 top-2.5 h-10 rounded-t-lg bg-[#38362F] transition-transform duration-300 group-hover:-translate-y-2"
       />
 
       <button
         type="button"
-        onClick={onOpen}
+        onClick={() => onOpen(letterRef.current?.getBoundingClientRect())}
         className="absolute inset-0 rounded-[1.75rem] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
         aria-label={`Open ${dream.title || 'dream'}`}
       />
@@ -305,7 +308,78 @@ function DreamCard({ dream, onOpen, onDelete }) {
   )
 }
 
-function DreamModal({ dream, onClose }) {
+function DreamModal({ dream, letterRect, onClose }) {
+  const sheetRef = useRef(null)
+  const contentRef = useRef(null)
+
+  // Slide the sheet out of the folder from where the card's letter sat, then unfold it.
+  useLayoutEffect(() => {
+    const sheet = sheetRef.current
+    const content = contentRef.current
+    if (!sheet || !content) {
+      return
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return
+    }
+
+    const duration = 720
+    const slideOut = 'cubic-bezier(0.33, 0, 0.67, 1)'
+    const unfold = 'cubic-bezier(0.22, 1, 0.36, 1)'
+    const target = sheet.getBoundingClientRect()
+    const sheetFrames = []
+
+    if (letterRect && target.width > 0 && target.height > 0) {
+      const scaleX = letterRect.width / target.width
+      const scaleY = letterRect.height / target.height
+      const dx =
+        letterRect.left + letterRect.width / 2 - (target.left + target.width / 2)
+      const dy = letterRect.top - target.top
+      // Keep the strip on screen for cards sitting near the top of the viewport.
+      const slideDy = Math.max(8, letterRect.top - 44) - target.top
+
+      sheetFrames.push(
+        {
+          offset: 0,
+          transform: `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})`,
+          borderRadius: '0.5rem 0.5rem 0 0',
+          easing: slideOut,
+        },
+        {
+          offset: 0.34,
+          transform: `translate(${dx}px, ${slideDy}px) scale(${scaleX}, ${scaleY})`,
+          borderRadius: '0.5rem 0.5rem 0 0',
+          easing: unfold,
+        },
+        { offset: 1, transform: 'none', borderRadius: '0.125rem' },
+      )
+    } else {
+      sheetFrames.push(
+        { offset: 0, transform: 'translateY(2rem) scaleY(0.88)', opacity: 0, easing: unfold },
+        { offset: 1, transform: 'none', opacity: 1 },
+      )
+    }
+
+    const sheetAnimation = sheet.animate(sheetFrames, {
+      duration,
+      easing: 'linear',
+      fill: 'both',
+    })
+    const contentAnimation = content.animate(
+      [
+        { offset: 0, opacity: 0 },
+        { offset: 0.52, opacity: 0 },
+        { offset: 1, opacity: 1 },
+      ],
+      { duration, easing: 'linear', fill: 'both' },
+    )
+
+    return () => {
+      sheetAnimation.cancel()
+      contentAnimation.cancel()
+    }
+  }, [letterRect])
+
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
@@ -332,47 +406,50 @@ function DreamModal({ dream, onClose }) {
       onClick={onClose}
     >
       <div
-        className="letter-sheet relative flex max-h-full w-full min-w-0 max-w-2xl flex-col rounded-sm border border-[#332F28] bg-[#1F1E1A] shadow-[0_30px_90px_rgba(0,0,0,0.75)]"
+        ref={sheetRef}
+        className="relative flex max-h-full w-full min-w-0 max-w-2xl origin-top flex-col rounded-sm border border-[#332F28] bg-[#1F1E1A] shadow-[0_30px_90px_rgba(0,0,0,0.75)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-[#1F1E1A] text-xl leading-none text-[#8A857A] transition hover:bg-[#2C2A24] hover:text-[#F2EDE1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A857A]"
-          aria-label="Close letter"
-        >
-          ×
-        </button>
-
-        <div className="min-h-0 overflow-y-auto px-7 py-9 sm:px-14 sm:py-14">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-[#8A857A]">
-            {relativeDate(dream.created_at)}
-          </p>
-          <h2
-            id="dream-modal-title"
-            className="mt-3 text-2xl font-bold leading-snug text-[#F2EDE1] [overflow-wrap:anywhere] sm:text-3xl"
+        <div ref={contentRef} className="flex min-h-0 flex-col">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-[#1F1E1A] text-xl leading-none text-[#8A857A] transition hover:bg-[#2C2A24] hover:text-[#F2EDE1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A857A]"
+            aria-label="Close letter"
           >
-            {dream.title || 'Untitled Dream'}
-          </h2>
+            ×
+          </button>
 
-          {dream.raw_text ? (
-            <div className="mt-9">
+          <div className="min-h-0 overflow-y-auto px-7 py-9 sm:px-14 sm:py-14">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-[#8A857A]">
+              {relativeDate(dream.created_at)}
+            </p>
+            <h2
+              id="dream-modal-title"
+              className="mt-3 text-2xl font-bold leading-snug text-[#F2EDE1] [overflow-wrap:anywhere] sm:text-3xl"
+            >
+              {dream.title || 'Untitled Dream'}
+            </h2>
+
+            {dream.raw_text ? (
+              <div className="mt-9">
+                <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[#8A857A]">
+                  Your dream
+                </p>
+                <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#BDB9AE] [overflow-wrap:anywhere]">
+                  {dream.raw_text}
+                </p>
+              </div>
+            ) : null}
+
+            <div className="mt-9 border-t border-dashed border-[#352F28] pt-9">
               <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[#8A857A]">
-                Your dream
+                Interpretation
               </p>
-              <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#BDB9AE] [overflow-wrap:anywhere]">
-                {dream.raw_text}
+              <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#E2DDD2] [overflow-wrap:anywhere]">
+                {dream.analysis || 'No analysis available yet.'}
               </p>
             </div>
-          ) : null}
-
-          <div className="mt-9 border-t border-dashed border-[#352F28] pt-9">
-            <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[#8A857A]">
-              Interpretation
-            </p>
-            <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#E2DDD2] [overflow-wrap:anywhere]">
-              {dream.analysis || 'No analysis available yet.'}
-            </p>
           </div>
         </div>
       </div>
