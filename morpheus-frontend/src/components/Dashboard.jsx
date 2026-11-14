@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { apiFetch } from '../lib/api.js'
+import SaveToNotes from './SaveToNotes.jsx'
 
 function dateParts(value) {
   const date = new Date(value)
@@ -516,6 +517,10 @@ function DreamModal({ dream, letterRect, onClose }) {
               <p className="whitespace-pre-wrap text-base leading-[1.8] text-[#E2DDD2] [overflow-wrap:anywhere]">
                 {dream.analysis || 'No analysis available yet.'}
               </p>
+            </div>
+
+            <div className="mt-9">
+              <SaveToNotes dream={dream} tone="paper" />
             </div>
           </div>
         </div>

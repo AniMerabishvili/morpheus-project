@@ -7,7 +7,20 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
     GEMINI_MODEL: str = "gemini-3.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    # Text LLM used for entity extraction + dream analysis:
+    #   "gemini" | "claude" (Anthropic API key) | "claude_cli" (local Claude Code login).
+    # Transcription and embeddings stay on Gemini/Groq/local regardless.
+    AI_PROVIDER: str = "gemini"
+    ANTHROPIC_API_KEY: Optional[str] = None
+    CLAUDE_MODEL: str = "claude-opus-5-5"
+    # AI_PROVIDER=claude_cli → local testing through the logged-in Claude Code CLI
+    # (no API key needed). Optional explicit path to the claude executable.
+    CLAUDE_CLI_PATH: Optional[str] = None
     GRAPH_LOCAL_SIMILARITY_THRESHOLD: float = 0.65
+    # Minimum cosine similarity for a book passage to be used in an analysis.
+    # Calibrated for all-MiniLM-L6-v2: real dreams score ~0.35-0.60, unrelated text <= 0.26.
+    RAG_MIN_SIMILARITY: float = 0.32
+    RAG_MAX_PASSAGES: int = 6
     GRAPH_CLOUD_SIMILARITY_THRESHOLD: float = 0.78
     GRAPH_CLOUD_STRICT_SIMILARITY_THRESHOLD: float = 0.88
     # OPENAI_API_KEY: str
@@ -25,6 +38,10 @@ class Settings(BaseSettings):
     # Groq API key — required when WHISPER_PROVIDER=groq.
     # Get a free key at console.groq.com (no credit card needed).
     GROQ_API_KEY: Optional[str] = None
+    # Georgian Nemo STT (transcribe-cpp)
+    # Set to the absolute path of georgian-nemo-Q8_0.gguf once downloaded.
+    GEORGIAN_MODEL_PATH: Optional[str] = None
+    GEORGIAN_MODEL_BACKEND: str = "cpu"  # "cpu" or "vulkan"
     # Field-level encryption key for sensitive dream columns (raw_text, analysis, title).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # If unset, fields are stored as plaintext (safe for local dev; always set in production).

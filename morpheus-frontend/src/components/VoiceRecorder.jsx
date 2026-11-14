@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+
+import AgenticOrb from './AgenticOrb.jsx'
+import LensPicker from './LensPicker.jsx'
+import { loadSavedBooks } from '../lib/lenses.js'
+import SaveToNotes from './SaveToNotes.jsx'
+import { readNoteFile } from '../lib/notes.js'
 import { useNavigate } from 'react-router-dom'
 
 import { apiFetch } from '../lib/api.js'
@@ -47,9 +53,27 @@ const BG = '#0f0f0f'
 const SURFACE = '#141414'
 const BORDER = '#1f1f1f'
 const MUTED = '#9b9164'
-const BAR_COUNT = 28
 
-const initialBars = Array.from({ length: BAR_COUNT }, () => 8)
+
+// Decode the finished recording and report whether it is (near) silent.
+async function detectSilence(blob) {
+  const AudioContext = window.AudioContext || window.webkitAudioContext
+  if (!AudioContext) return false
+  const ctx = new AudioContext()
+  try {
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer())
+    let peak = 0
+    for (let c = 0; c < decoded.numberOfChannels; c += 1) {
+      const data = decoded.getChannelData(c)
+      for (let i = 0; i < data.length; i += 1) peak = Math.max(peak, Math.abs(data[i]))
+    }
+    return peak < 0.01
+  } catch {
+    return false // can't decode (e.g. some Safari formats) — don't guess
+  } finally {
+    ctx.close().catch(() => {})
+  }
+}
 
 function formatTime(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60)
@@ -86,17 +110,16 @@ function getRecorderOptions() {
   return { options: undefined, extension: 'webm' }
 }
 
-function VoiceRecorder({ onDreamRecorded, onClose }) {
+function VoiceRecorder({ onDreamRecorded, onClose, initialText = '' }) {
   const navigate = useNavigate()
-  const [mode, setMode] = useState('voice')
+  const [mode, setMode] = useState(initialText ? 'text' : 'voice')
   const [status, setStatus] = useState('idle')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [audioBlob, setAudioBlob] = useState(null)
   const [audioUrl, setAudioUrl] = useState('')
-  const [dreamText, setDreamText] = useState('')
+  const [dreamText, setDreamText] = useState(initialText)
   const [result, setResult] = useState(null)
   const [errorMessage, setErrorMessage] = useState('')
-  const [bars, setBars] = useState(initialBars)
   const [loadingQuote, setLoadingQuote] = useState(null)
   const [quoteVisible, setQuoteVisible] = useState(true)
 
@@ -108,6 +131,8 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
   const animationRef = useRef(null)
   const extensionRef = useRef('webm')
   const discardRecordingRef = useRef(false)
+
+  const [books, setBooks] = useState(loadSavedBooks)
 
   const isRecording = status === 'recording'
   const isUploading = status === 'uploading'
@@ -172,7 +197,6 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
     setDreamText('')
     setResult(null)
     setErrorMessage('')
-    setBars(initialBars)
   }
 
   function switchMode(nextMode) {
@@ -223,21 +247,10 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
 
     audioContextRef.current = audioContext
     analyserRef.current = analyser
-
-    const data = new Uint8Array(analyser.frequencyBinCount)
-
-    function draw() {
-      analyser.getByteFrequencyData(data)
-      const step = Math.max(1, Math.floor(data.length / BAR_COUNT))
-      const nextBars = Array.from({ length: BAR_COUNT }, (_, index) => {
-        const value = data[index * step] || 0
-        return Math.max(8, Math.round((value / 255) * 72))
-      })
-      setBars(nextBars)
-      animationRef.current = requestAnimationFrame(draw)
+    // Contexts created after the permission prompt can start suspended.
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {})
     }
-
-    draw()
   }
 
   async function startRecording() {
@@ -257,7 +270,13 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
       const { options, extension } = getRecorderOptions()
       const recorder = new MediaRecorder(stream, options)
 
@@ -273,6 +292,8 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
       }
 
       recorder.onstop = () => {
+        // Release the mic only after the recorder flushed its final chunk.
+        stopMediaTracks()
         if (discardRecordingRef.current) {
           discardRecordingRef.current = false
           chunksRef.current = []
@@ -296,12 +317,18 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
           return previewUrl
         })
         setStatus('recorded')
+        detectSilence(blob).then((silent) => {
+          if (silent) {
+            setErrorMessage(
+              'No sound was detected. Check your microphone input volume in system sound settings, then re-record.',
+            )
+          }
+        })
       }
 
-      recorder.start()
+      recorder.start(250)
       discardRecordingRef.current = false
       setElapsedSeconds(0)
-      setBars(initialBars)
       setStatus('recording')
       startWaveform(stream)
     } catch (error) {
@@ -318,8 +345,9 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
     const recorder = mediaRecorderRef.current
     if (recorder && recorder.state === 'recording') {
       recorder.stop()
+    } else {
+      stopMediaTracks()
     }
-    stopMediaTracks()
     stopWaveform()
   }
 
@@ -333,6 +361,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
 
     const formData = new FormData()
     formData.append('audio', audioBlob, `dream.${extensionRef.current}`)
+    formData.append('books', JSON.stringify(books))
 
     try {
       const response = await apiFetch('/v1/dreams/process', {
@@ -361,7 +390,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
       const response = await apiFetch('/v1/dreams/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dream_text: dreamText.trim() }),
+        body: JSON.stringify({ dream_text: dreamText.trim(), books }),
       })
       const data = await parseResponse(response)
       setResult(data)
@@ -391,7 +420,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
 
   return (
     <section style={styles.card}>
-      <style>{`@keyframes morpheus-spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes morpheus-spin { to { transform: rotate(360deg); } } @keyframes morpheus-pulse { 50% { opacity: 0.35; } } .morpheus-orb-button:focus-visible { outline: 1px solid #FFDE6E; outline-offset: 4px; } .morpheus-orb-button:disabled { cursor: default; }`}</style>
 
       {isUploading ? (
         <div style={styles.loadingBlock}>
@@ -448,7 +477,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
                 <VoiceMode
                   status={status}
                   elapsedSeconds={elapsedSeconds}
-                  bars={bars}
+                  analyserRef={analyserRef}
                   audioUrl={audioUrl}
                   onStart={startRecording}
                   onStop={stopRecording}
@@ -462,10 +491,17 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
                   canSubmit={canSubmitText}
                   onChange={setDreamText}
                   onSubmit={submitText}
+                  onImportError={setErrorMessage}
                 />
               )}
             </>
           )}
+
+          {!result ? (
+            <div style={{ marginTop: '16px' }}>
+              <LensPicker value={books} onChange={setBooks} disabled={isUploading || isRecording} />
+            </div>
+          ) : null}
 
           {errorMessage ? <p style={styles.error}>{errorMessage}</p> : null}
 
@@ -487,7 +523,7 @@ function VoiceRecorder({ onDreamRecorded, onClose }) {
 function VoiceMode({
   status,
   elapsedSeconds,
-  bars,
+  analyserRef,
   audioUrl,
   onStart,
   onStop,
@@ -503,30 +539,26 @@ function VoiceMode({
       <button
         type="button"
         onClick={isRecording ? onStop : onStart}
-        disabled={isUploading}
+        disabled={isUploading || isRecorded}
         aria-label={isRecording ? 'Stop recording' : 'Start recording'}
-        style={{
-          ...styles.recordButton,
-          ...(isRecording ? styles.recordButtonActive : {}),
-        }}
+        className="morpheus-orb-button"
+        style={styles.orbButton}
       >
-        {isRecording ? 'Stop' : 'Record'}
+        <AgenticOrb analyserRef={analyserRef} active={isRecording} size={210} />
       </button>
 
-      <p style={styles.timer}>{formatTime(elapsedSeconds)}</p>
-
-      <div style={styles.waveform} aria-hidden="true">
-        {bars.map((height, index) => (
-          <span
-            key={index}
-            style={{
-              ...styles.waveBar,
-              height: `${height}px`,
-              opacity: isRecording ? 1 : 0.45,
-            }}
-          />
-        ))}
-      </div>
+      <p style={styles.orbHint}>
+        {isRecording ? (
+          <>
+            <span style={styles.liveDot} />
+            Listening · <span style={styles.timer}>{formatTime(elapsedSeconds)}</span> · tap to stop
+          </>
+        ) : isRecorded ? (
+          <>Recorded · <span style={styles.timer}>{formatTime(elapsedSeconds)}</span></>
+        ) : (
+          'Tap the sphere to start recording'
+        )}
+      </p>
 
       {audioUrl ? (
         <audio controls src={audioUrl} style={styles.audioPreview}>
@@ -553,8 +585,25 @@ function VoiceMode({
   )
 }
 
-function TextMode({ value, status, canSubmit, onChange, onSubmit }) {
+function TextMode({ value, status, canSubmit, onChange, onSubmit, onImportError }) {
   const isUploading = status === 'uploading'
+
+  async function importNote(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 200_000) {
+      onImportError('That note is too large to import.')
+      return
+    }
+    try {
+      const text = await readNoteFile(file)
+      onChange(value.trim() ? [value.trim(), text].join('\n\n') : text)
+      onImportError('')
+    } catch {
+      onImportError('Could not read that note file.')
+    }
+  }
 
   return (
     <div style={styles.modePanel}>
@@ -567,8 +616,17 @@ function TextMode({ value, status, canSubmit, onChange, onSubmit }) {
         style={styles.textarea}
       />
       <div style={styles.textMeta}>
-        <span>{value.trim().length} characters</span>
-        <span>Minimum 20 characters</span>
+        <span>{value.trim().length} characters · min 20</span>
+        <label style={styles.importLabel}>
+          <input
+            type="file"
+            accept=".txt,.md,.markdown,text/plain,text/markdown"
+            onChange={importNote}
+            disabled={isUploading}
+            style={{ display: 'none' }}
+          />
+          Import from notes (.txt, .md)
+        </label>
       </div>
       <button
         type="button"
@@ -592,10 +650,19 @@ function ResultsCard({ result, onViewGraph }) {
   return (
     <section style={styles.resultCard}>
       <h2 style={styles.resultTitle}>{result.title || 'Untitled Dream'}</h2>
+      {Array.isArray(result.sources) && result.sources.length ? (
+        <p style={styles.lensNote}>Sources: {result.sources.join(' · ')}</p>
+      ) : result.grounded === false ? (
+        <p style={styles.lensNote}>No library passage was close enough to interpret this dream.</p>
+      ) : null}
       <p style={styles.analysis}>{result.analysis}</p>
 
       <PillGroup label="Symbols" items={symbols} />
       <PillGroup label="Emotions" items={emotions} />
+
+      <div>
+        <SaveToNotes dream={result} />
+      </div>
 
       <button
         type="button"
@@ -633,99 +700,93 @@ const styles = {
     border: `1px solid ${BORDER}`,
     borderRadius: '8px',
     background: SURFACE,
-    padding: '24px',
+    padding: '22px',
     boxSizing: 'border-box',
   },
   header: {
-    marginBottom: '24px',
+    marginBottom: '18px',
     paddingRight: '56px',
   },
   eyebrow: {
-    margin: '0 0 8px',
+    margin: '0 0 6px',
     color: GOLD_SHADOW,
     letterSpacing: '0.22em',
     textTransform: 'uppercase',
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: 900,
   },
   title: {
     margin: 0,
     color: GOLD_PALE,
-    fontSize: 'clamp(32px, 7vw, 48px)',
+    fontSize: 'clamp(22px, 4vw, 28px)',
     fontWeight: 600,
-    lineHeight: 1,
+    lineHeight: 1.15,
+    letterSpacing: '-0.01em',
   },
   modeToggle: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
-    gap: '8px',
-    marginBottom: '24px',
+    gap: '4px',
+    padding: '4px',
+    marginBottom: '8px',
+    border: `1px solid ${BORDER}`,
+    borderRadius: '10px',
+    background: '#101010',
   },
   modeButton: {
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: BORDER,
-    borderRadius: '6px',
-    background: '#101010',
-    color: GOLD_PALE,
-    padding: '12px 16px',
+    border: 'none',
+    borderRadius: '7px',
+    background: 'transparent',
+    color: MUTED,
+    padding: '8px 12px',
     cursor: 'pointer',
-    fontWeight: 700,
+    fontSize: '14px',
+    fontWeight: 600,
+    transition: 'background 160ms ease, color 160ms ease',
   },
   modeButtonActive: {
-    background: 'rgba(255, 222, 110, 0.16)',
-    borderColor: GOLD,
+    background: 'rgba(255, 222, 110, 0.14)',
     color: GOLD,
-    boxShadow: `inset 0 -3px 0 ${GOLD}`,
   },
   modePanel: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '18px',
+    gap: '10px',
   },
-  recordButton: {
-    width: '168px',
-    height: '168px',
+  orbButton: {
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
     borderRadius: '999px',
-    border: `1px solid ${BORDER}`,
-    background: '#101010',
-    color: GOLD_PALE,
     cursor: 'pointer',
-    fontSize: '20px',
-    fontWeight: 800,
-    transition: 'box-shadow 180ms ease, transform 180ms ease, background 180ms ease',
+    lineHeight: 0,
   },
-  recordButtonActive: {
-    background: 'rgba(255, 222, 110, 0.18)',
-    color: GOLD,
-    boxShadow: `0 0 0 10px rgba(255, 222, 110, 0.08), 0 0 44px rgba(255, 222, 110, 0.34)`,
-    transform: 'scale(1.02)',
-  },
-  timer: {
+  orbHint: {
     margin: 0,
-    color: GOLD,
-    fontSize: '28px',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  waveform: {
-    width: '100%',
-    minHeight: '96px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: '5px',
-    padding: '16px',
-    boxSizing: 'border-box',
-    border: `1px solid ${BORDER}`,
-    borderRadius: '8px',
-    background: '#101010',
+    gap: '6px',
+    color: MUTED,
+    fontSize: '13px',
+    letterSpacing: '0.02em',
   },
-  waveBar: {
-    width: '7px',
+  liveDot: {
+    width: '6px',
+    height: '6px',
     borderRadius: '999px',
     background: GOLD,
-    transition: 'height 80ms linear',
+    boxShadow: `0 0 8px ${GOLD}`,
+    animation: 'morpheus-pulse 1.4s ease-in-out infinite',
+  },
+  timer: {
+    color: GOLD,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  lensNote: {
+    margin: '-4px 0 0',
+    color: MUTED,
+    fontSize: '12px',
   },
   audioPreview: {
     width: '100%',
@@ -770,6 +831,12 @@ const styles = {
     padding: '16px',
     font: 'inherit',
     outlineColor: GOLD,
+  },
+  importLabel: {
+    color: GOLD,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    textUnderlineOffset: '3px',
   },
   textMeta: {
     width: '100%',

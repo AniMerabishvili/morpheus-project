@@ -59,15 +59,18 @@ body {
   background: #0f0f0f;
 }
 
-button,
-textarea {
-  font: inherit;
-}
+/* In the base layer so Tailwind utilities (text size, focus rings) can override them. */
+@layer base {
+  button,
+  textarea {
+    font: inherit;
+  }
 
-button:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #FFDE6E;
-  outline-offset: 2px;
+  button:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #FFDE6E;
+    outline-offset: 2px;
+  }
 }
 
 #root {
@@ -78,3 +81,30 @@ textarea:focus-visible {
   transform-origin: top center;
   backface-visibility: hidden;
 }
+
+/* Auth form fade-up on load */
+@keyframes auth-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.auth-enter { animation: auth-enter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@media (prefers-reduced-motion: reduce) { .auth-enter { animation: none; } }
+
+/* Scrollable without a visible scrollbar (modals, side panels) */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Graph hover tooltip (force-graph / float-tooltip) */
+.float-tooltip-kap {
+  padding: 6px 10px !important;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px !important;
+  background: rgba(18, 18, 18, 0.92) !important;
+  color: #E6DFA9 !important;
+  font: 500 12px/1.4 "Helvetica Neue GEO", Inter, ui-sans-serif, system-ui, sans-serif !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  max-width: 260px;
+  white-space: normal;
+}
+

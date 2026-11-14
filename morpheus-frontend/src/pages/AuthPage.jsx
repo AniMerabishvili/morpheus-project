@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import Logo from '../components/Logo.jsx'
 import { supabase } from '../lib/supabase.js'
 
 const fieldHeight = 'h-[clamp(2.5rem,5.4vh,3rem)]'
@@ -85,8 +86,10 @@ function AuthPage() {
   }
 
   return (
-    <main className="flex h-dvh items-center justify-center overflow-y-auto bg-[#0a0a0a] p-4 md:p-6">
-      <div className="w-full max-w-104 py-[clamp(0.5rem,2vh,1.5rem)]">
+    <main className="relative flex h-dvh overflow-hidden bg-[#0a0a0a]">
+      <div className="relative z-10 flex w-full min-w-0 flex-1 items-center justify-center overflow-y-auto p-4 md:p-10">
+      <div className="w-full max-w-104 py-[clamp(0.5rem,2vh,1.5rem)] auth-enter">
+        <Logo className="mb-[clamp(1rem,4vh,2.5rem)]" />
         <h1 className="text-[1.75rem] leading-tight tracking-tight text-[#F4F4F1]">
           {text.heading}
         </h1>
@@ -173,6 +176,7 @@ function AuthPage() {
             {text.switchAction}
           </button>
         </p>
+      </div>
       </div>
     </main>
   )

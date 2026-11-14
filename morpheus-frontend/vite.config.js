@@ -20,6 +20,13 @@ export default defineConfig({
         display: 'standalone',
         background_color: '#0f0f0f',
         theme_color: '#FFDE6E',
+        // Installed app shows up in the phone's share sheet: share a note from
+        // Samsung Notes / Keep / Obsidian → it opens in Morpheus ready to analyse.
+        share_target: {
+          action: '/share',
+          method: 'GET',
+          params: { title: 'title', text: 'text', url: 'url' },
+        },
         icons: [
           {
             src: '/icons/morpheus192.png',

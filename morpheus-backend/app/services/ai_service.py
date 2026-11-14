@@ -68,6 +68,106 @@ class _GeminiModel:
 
 gemini_model = _GeminiModel()
 
+
+# ---------------------------------------------------------------------------
+# Claude (used for extraction + analysis when AI_PROVIDER=claude / claude_cli)
+# ---------------------------------------------------------------------------
+_AI_PROVIDER = settings.AI_PROVIDER.strip().lower()
+_USE_CLAUDE_CLI = _AI_PROVIDER == "claude_cli"
+_USE_CLAUDE = _AI_PROVIDER == "claude" or _USE_CLAUDE_CLI
+_claude_client = None
+if _AI_PROVIDER == "claude":
+    import anthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise RuntimeError("AI_PROVIDER=claude but ANTHROPIC_API_KEY is not set.")
+    _claude_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, max_retries=3)
+    logger.info("AI provider: Claude API (%s)", settings.CLAUDE_MODEL)
+elif _USE_CLAUDE_CLI:
+    logger.info("AI provider: local Claude Code CLI (%s)", settings.CLAUDE_MODEL)
+
+# Strict JSON schema for Claude structured outputs.
+_CLAUDE_ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "symbols": {"type": "array", "items": {"type": "string"}},
+        "emotions": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+    },
+    "required": ["title", "symbols", "emotions", "summary"],
+    "additionalProperties": False,
+}
+
+
+def _resolve_claude_cli() -> str:
+    """Find the Claude Code executable (avoids the Windows .cmd shim's quoting issues)."""
+    import shutil
+
+    if settings.CLAUDE_CLI_PATH:
+        return settings.CLAUDE_CLI_PATH
+    found = shutil.which("claude")
+    if not found:
+        raise RuntimeError("AI_PROVIDER=claude_cli but the `claude` CLI is not on PATH.")
+    if found.lower().endswith((".cmd", ".ps1")) or not os.path.splitext(found)[1]:
+        native = os.path.join(
+            os.path.dirname(found), "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"
+        )
+        if os.path.exists(native):
+            return native
+    return found
+
+
+def _call_claude_cli(prompt: str, effort: str, json_schema: Optional[dict] = None) -> str:
+    """Run one headless Claude Code request using the local CLI login (dev/testing only)."""
+    cmd = [
+        _resolve_claude_cli(), "-p",
+        "--model", settings.CLAUDE_MODEL,
+        "--effort", effort,
+        "--output-format", "json",
+        "--tools", "",
+        "--no-session-persistence",
+        "--system-prompt", "You are the analysis engine of the Morpheus dream journal. Follow the user prompt exactly.",
+    ]
+    if json_schema is not None:
+        cmd += ["--json-schema", json.dumps(json_schema)]
+    proc = subprocess.run(
+        cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=300,
+    )
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:300]}")
+    if data.get("is_error"):
+        raise RuntimeError(f"Claude CLI error: {str(data.get('result'))[:300]}")
+    if json_schema is not None and data.get("structured_output") is not None:
+        return json.dumps(data["structured_output"], ensure_ascii=False)
+    return (data.get("result") or "").strip()
+
+
+def _call_claude(prompt: str, effort: str, json_schema: Optional[dict] = None) -> str:
+    """Single Claude request. Returns the concatenated text output."""
+    kind = "extraction" if json_schema is not None else "analysis"
+    if _USE_CLAUDE_CLI:
+        text = _call_claude_cli(prompt, effort, json_schema)
+        logger.info("Claude %s done via local CLI (%s)", kind, settings.CLAUDE_MODEL)
+        return text
+    output_config: dict = {"effort": effort}
+    if json_schema is not None:
+        output_config["format"] = {"type": "json_schema", "schema": json_schema}
+    response = _claude_client.beta.messages.create(
+        model=settings.CLAUDE_MODEL,
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config=output_config,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise ValueError("Claude declined the request.")
+    logger.info("Claude %s done via API (%s)", kind, response.model)
+    return "".join(b.text for b in response.content if b.type == "text").strip()
+
 # ---------------------------------------------------------------------------
 # OpenAI client (disabled)
 # ---------------------------------------------------------------------------
@@ -206,6 +306,31 @@ def _transcribe_gemini(audio_path: str) -> dict:
             os.remove(audio_path)
 
 
+def _transcribe_georgian_nemo(audio_path: str) -> dict:
+    """Transcribe Georgian audio with transcribe-cpp + georgian-nemo-Q8_0.gguf.
+
+    Returns {"georgian_text": str} — stays in Georgian (NOT translated).
+    Requires GEORGIAN_MODEL_PATH to point to the .gguf file.
+    """
+    import soundfile as sf
+    from transcribe_cpp import Model
+
+    wav_path: Optional[str] = None
+    try:
+        wav_path = _convert_to_wav(audio_path)  # 16 kHz mono WAV
+        audio_data, sr = sf.read(wav_path, dtype="float32")
+        if sr != 16000:
+            raise ValueError(f"Expected 16 kHz after conversion, got {sr}")
+        model = Model(settings.GEORGIAN_MODEL_PATH, backend=settings.GEORGIAN_MODEL_BACKEND)
+        result = model.session().run(audio_data, language="ka")
+        return {"georgian_text": result.text.strip()}
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        if wav_path and os.path.exists(wav_path):
+            os.remove(wav_path)
+
+
 def transcribe_audio(audio_path: str) -> dict:
     """Transcribe audio and return English text.
 
@@ -225,6 +350,62 @@ def transcribe_audio(audio_path: str) -> dict:
         "Get a free key at console.groq.com"
     )
     return _transcribe_gemini(audio_path)
+
+
+def _get_audio_mime(audio_path: str) -> str:
+    """Best-effort MIME type for inline audio uploads to Gemini."""
+    ext = os.path.splitext(audio_path)[1].lower()
+    return {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".mp4": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".webm": "audio/webm",
+        ".flac": "audio/flac",
+        ".aac": "audio/aac",
+    }.get(ext, "audio/mpeg")
+
+
+def detect_audio_language(audio_path: str) -> str:
+    """Return the ISO 639-1 code of the spoken language (e.g. "ka", "en").
+
+    Does not delete the file. Returns "unknown" when detection fails.
+    """
+    try:
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+        response = _gemini_client.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=types.Content(
+                parts=[
+                    types.Part(inline_data=types.Blob(data=audio_bytes, mime_type=_get_audio_mime(audio_path))),
+                    types.Part(text=(
+                        "Identify the language spoken in this audio. "
+                        "Reply with only its ISO 639-1 code, for example ka or en."
+                    )),
+                ]
+            ),
+        )
+        code = (response.text or "").strip().lower()
+        return code[:2] if re.fullmatch(r"[a-z]{2}\W*", code) else "unknown"
+    except Exception as exc:
+        logger.warning("detect_audio_language failed: %s", exc)
+        return "unknown"
+
+
+def transcribe_audio_auto(audio_path: str) -> dict:
+    """Route audio by spoken language.
+
+    Georgian audio → nemo model (stays Georgian), when GEORGIAN_MODEL_PATH is set.
+    Anything else  → transcribe_audio() (translated to English).
+    Returns {"text": str, "language": str}. The audio file is deleted afterwards.
+    """
+    if settings.GEORGIAN_MODEL_PATH and detect_audio_language(audio_path) == "ka":
+        result = _transcribe_georgian_nemo(audio_path)
+        return {"text": result["georgian_text"], "language": "ka"}
+    result = transcribe_audio(audio_path)
+    return {"text": result["english_text"], "language": "en"}
 
 
 # ---------------------------------------------------------------------------
@@ -375,62 +556,139 @@ def anonymize_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def generate_embedding(text: str) -> list[float]:
-    """Encode text into a 384-dimensional vector.
+    """Encode text into a 384-dimensional all-MiniLM-L6-v2 vector.
 
-    Local mode: all-MiniLM-L6-v2 via sentence-transformers.
-    Cloud mode: Gemini embedding API with 384-dim output —
-    compatible with the existing vector(384) Supabase schema.
+    Same model locally and on Render (fastembed/ONNX, no API calls), matching the
+    model the book library was embedded with, so similarity scores are meaningful.
     """
-    if settings.USE_LOCAL_MODELS:
-        return _get_embedder().encode(text).tolist()
-    result = _gemini_client.models.embed_content(
-        model=_GEMINI_EMBEDDING_MODEL,
-        contents=text,
-        config=types.EmbedContentConfig(output_dimensionality=384),
-    )
-    return list(result.embeddings[0].values)
+    from app.services.embeddings import embed_text
+
+    return embed_text(text)
 
 
-def get_rag_context(db: Client, dream_text: str) -> str:
-    """Retrieve the most relevant knowledge_base chunks for a dream.
+def _rag_query_text(dream_text: str, entities: Optional[dict]) -> str:
+    """Text to embed for retrieval. MiniLM is English-only, so Georgian dreams are
+    searched with their English symbols/emotions; English dreams get them appended."""
+    extras = []
+    if entities:
+        if entities.get("symbols"):
+            extras.append("Symbols: " + ", ".join(entities["symbols"]))
+        if entities.get("emotions"):
+            extras.append("Emotions: " + ", ".join(entities["emotions"]))
+    is_georgian = bool(re.search(r"[\u10A0-\u10FF]", dream_text))
+    if is_georgian and extras:
+        return ". ".join(extras)
+    return "\n".join([dream_text, *extras])
 
-    Uses the same all-MiniLM-L6-v2 384-dimensional embedding model as
-    book ingestion, which keeps pgvector cosine similarity meaningful.
+
+def _round_robin(rows: list[dict], books: list[str], limit: int) -> list[dict]:
+    """Spread picks across the chosen books, best passages first within each book."""
+    per_book: dict[str, list[dict]] = {}
+    for row in rows:  # rows arrive sorted by similarity
+        per_book.setdefault(row.get("book_title"), []).append(row)
+    picked: list[dict] = []
+    while len(picked) < limit and any(per_book.get(b) for b in books):
+        for title in books:
+            if per_book.get(title) and len(picked) < limit:
+                picked.append(per_book[title].pop(0))
+    return picked
+
+
+def retrieve_passages(
+    db: Client,
+    dream_text: str,
+    entities: Optional[dict] = None,
+    books: Optional[list[str]] = None,
+) -> list[dict]:
+    """Library passages at least RAG_MIN_SIMILARITY similar to the dream.
+
+    Returns [] when nothing in the library (or in the chosen books) is close enough.
     """
-    query_embedding = generate_embedding(dream_text)
-    response = (
-        db.rpc(
-            "match_documents",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": 0.75,
-                "match_count": 5,
-            },
-        )
-        .execute()
-    )
+    threshold = settings.RAG_MIN_SIMILARITY
+    limit = settings.RAG_MAX_PASSAGES
+    query_embedding = generate_embedding(_rag_query_text(dream_text, entities))
 
-    matches = response.data or []
-    if not matches:
-        return "No sufficiently similar academic context was retrieved."
-
-    context_parts: list[str] = []
-    for index, match in enumerate(matches, start=1):
-        book_title = match.get("book_title") or "Unknown source"
-        content = " ".join(str(match.get("content") or "").split())
-        similarity = match.get("similarity")
-
-        if similarity is None:
-            heading = f"[{index}] Source: {book_title}"
-        else:
-            heading = (
-                f"[{index}] Source: {book_title} "
-                f"(similarity: {float(similarity):.3f})"
+    if not books:
+        return (
+            db.rpc(
+                "match_documents",
+                {"query_embedding": query_embedding, "match_threshold": threshold, "match_count": limit},
             )
+            .execute()
+            .data
+            or []
+        )
 
-        context_parts.append(f"{heading}\n{content}")
+    try:
+        rows = (
+            db.rpc(
+                "match_documents_in_books",
+                {
+                    "query_embedding": query_embedding,
+                    "match_threshold": threshold,
+                    "match_count": 60,
+                    "book_titles": books,
+                },
+            )
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        # Migration not applied yet: fetch from the unfiltered function and filter here.
+        logger.warning("match_documents_in_books unavailable (%s); filtering in Python.", exc)
+        rows = (
+            db.rpc(
+                "match_documents",
+                {"query_embedding": query_embedding, "match_threshold": threshold, "match_count": 1000},
+            )
+            .execute()
+            .data
+            or []
+        )
+        rows = [r for r in rows if r.get("book_title") in books]
+    return _round_robin(rows, books, limit)
 
-    return "\n\n".join(context_parts)
+
+def format_passages(passages: list[dict]) -> str:
+    from app.services.library import book_label
+
+    parts: list[str] = []
+    for index, match in enumerate(passages, start=1):
+        source = book_label(match["book_title"]) if match.get("book_title") else "Unknown source"
+        content = " ".join(str(match.get("content") or "").split())
+        parts.append(f"[{index}] Source: {source}\n{content}")
+    return "\n\n".join(parts)
+
+
+def passage_sources(passages: list[dict]) -> list[str]:
+    """Distinct book labels used, in order of first appearance."""
+    from app.services.library import book_label
+
+    seen: list[str] = []
+    for match in passages:
+        label = book_label(match["book_title"]) if match.get("book_title") else None
+        if label and label not in seen:
+            seen.append(label)
+    return seen
+
+
+def no_match_message(dream_text: str, books_chosen: bool) -> str:
+    """Honest reply when no passage clears the similarity threshold. No LLM call,
+    so nothing is interpreted without a source."""
+    if re.search(r"[\u10A0-\u10FF]", dream_text):
+        scope = "შენ მიერ არჩეულ წიგნებში" if books_chosen else "Morpheus-ის ბიბლიოთეკაში"
+        return (
+            f"{scope} ვერ ვიპოვე ფრაგმენტი, რომელიც საკმარისად ახლოსაა შენს სიზმართან, "
+            "ამიტომ ინტერპრეტაციას არ გთავაზობ, რომ წყაროს გარეშე არაფერი მოვიგონო. "
+            "სიზმარი შენახულია. სცადე მეტი დეტალის დამატება ან სხვა წიგნების არჩევა."
+        )
+    scope = "the books you chose" if books_chosen else "the Morpheus library"
+    return (
+        f"I could not find a passage in {scope} that is close enough to this dream, "
+        "so I am not offering an interpretation rather than inventing one without a source. "
+        "Your dream is saved. Try adding more detail, or choose different books."
+    )
 
 
 def get_user_history(db: Client, user_id: str, limit: int = 5) -> str:
@@ -660,6 +918,14 @@ def extract_entities(text: str) -> dict:
     """
     prompt = _EXTRACT_PROMPT.format(text=text)
 
+    if _USE_CLAUDE:
+        try:
+            raw = _call_claude(prompt, effort="low", json_schema=_CLAUDE_ENTITY_SCHEMA)
+            return _normalize_entities(_parse_gemini_json(raw), text)
+        except Exception as e:
+            logger.error("Claude extraction failed (%s: %s) — returning local fallback.", type(e).__name__, e)
+            return _local_entity_fallback(text)
+
     for model in (_GEMINI_MODEL,):
         try:
             raw = _call_gemini(model, prompt)
@@ -699,25 +965,55 @@ def _call_gemini_analysis(prompt: str) -> str:
         raise
 
 
-def generate_analysis(dream_text: str, entities: dict, rag_context: str, user_history: str = "") -> str:
-    """Generate a language-matched Jungian dream analysis grounded in RAG context.
+def _books_section(book_labels: Optional[list[str]]) -> str:
+    """Prompt block for when the dreamer chose specific books from the Morpheus library."""
+    if not book_labels:
+        return ""
+    listed = "\n".join(f"- {label}" for label in book_labels)
+    return f"""
+The dreamer chose to have this dream read through these books from the Morpheus library:
+{listed}
+The library passages above were retrieved only from these books. Name the books (and
+their authors) you draw on. Never invent quotes or attribute ideas a book does not
+contain. If a chosen book has no passage that fits this dream, rely on the others.
+"""
 
-    When `user_history` is provided the prompt instructs the model to use it as a
-    secondary personalisation layer on top of the RAG foundation — noting recurring
-    symbols, emotions, and growth across sessions — without letting personal history
-    override the academic psychological grounding.
+
+def generate_analysis(
+    dream_text: str,
+    entities: dict,
+    rag_context: str,
+    user_history: str = "",
+    book_labels: Optional[list[str]] = None,
+) -> str:
+    """Generate a language-matched dream analysis grounded only in library passages.
+
+    `rag_context` holds the retrieved passages (the only allowed sources).
+    `user_history` may only be used to notice recurring symbols or feelings.
     """
     symbols = entities.get("symbols", [])
     emotions = entities.get("emotions", [])
     summary = entities.get("summary", "")
     user_history_section = (
-        "\nUser's personal dream history (secondary layer, use this to personalise the response;"
-        "\nnote recurring symbols, themes, and emotional patterns across sessions; reference growth"
-        "\nor continuity when meaningful, but keep the academic RAG above as the primary foundation):"
+        "\nUser's personal dream history (only for noticing recurring symbols or feelings, "
+        "not as a source of meaning):"
         f"\n{user_history}\n"
     ) if user_history else ""
     prompt = f"""\
-You are a compassionate Jungian dream analyst.
+You are the dream analyst of Morpheus. Your ONLY sources of interpretation are the
+passages from the Morpheus library given below under "Library passages".
+
+GROUNDING RULES (most important):
+- Every interpretive idea must come from the library passages. Name the book you
+  draw on (for example "In Man and His Symbols, Jung..."), but do not mention
+  passage numbers like [1].
+- Do not use outside knowledge, other authors, popular dream dictionaries, or ideas
+  the passages do not contain. Do not invent quotes.
+- If the passages fit only part of the dream, interpret only that part and say
+  plainly that the library does not speak to the rest. Saying less is better than
+  adding unsupported meaning.
+- The personal dream history (if present) may only be used to notice recurring
+  symbols or feelings, never as a source of meaning.
 
 First detect whether the Dream text is written in English or Georgian.
 Write the analysis in the exact same language as the Dream text:
@@ -731,21 +1027,16 @@ address form (შენ-form). Never use the formal plural/polite form (თქ�
 Correct:   შენი სიზმარი, შენ გრძნობ, გაქვს, გიდგას, შეგიძლია
 Incorrect: თქვენი სიზმარი, თქვენ გრძნობთ, გაქვთ, გიდგათ, შეგიძლიათ
 
-The tone must feel like a warm, personal conversation, like a trusted friend
-who also happens to understand Jungian psychology. Not clinical, not distant,
-not formal. Write as if speaking directly to one person you know well.
+The tone must feel like a warm, personal conversation with one person you know
+well. Not clinical, not distant, not formal.
 
-The analysis must be 150-200 words in either language. Use warm,
-non-diagnostic, empathetic language. Never diagnose, never make clinical
-claims, and never imply that the dream proves a mental health condition.
+The analysis must be 120-200 words in either language (shorter is fine when the
+passages support less). Use warm, non-diagnostic, empathetic language. Never
+diagnose, never make clinical claims, and never imply that the dream proves a
+mental health condition.
 
 Do not use long dashes (---, --, em dash, en dash) or any other special
 punctuation characters. Use only standard commas, periods, and question marks.
-
-Reference specific symbols from the dream. Connect those symbols to Jungian
-concepts found in the academic context, such as archetype, shadow, anima,
-animus, self, individuation, myth, transformation, projection, or the
-unconscious, but only when the retrieved context supports the connection.
 
 Dream:
 {dream_text}
@@ -753,12 +1044,18 @@ Dream:
 Extracted entities:
 {json.dumps({"symbols": symbols, "emotions": emotions, "summary": summary}, ensure_ascii=False)}
 
-Academic RAG context (primary foundation, always use this as the psychological basis):
+Library passages (the only allowed sources):
 {rag_context}
-{user_history_section}
+{user_history_section}{_books_section(book_labels)}
 Return only the analysis text in the same language as the Dream text. Do not
 use markdown.
 """
+    if _USE_CLAUDE:
+        analysis = _call_claude(prompt, effort="medium")
+        if not analysis:
+            raise ValueError("Claude returned an empty analysis.")
+        return analysis
+
     try:
         analysis = _call_gemini_analysis(prompt)
     except RetryError as e:

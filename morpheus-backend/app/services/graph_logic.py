@@ -5,20 +5,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.config import settings
+from app.crypto import decrypt_dream_row
 from supabase import Client
 
-if settings.USE_LOCAL_MODELS:
-    from sentence_transformers import SentenceTransformer as _SentenceTransformer
-    from sklearn.metrics.pairwise import cosine_similarity as _cosine_similarity
-
-_embedder = None
-
-
-def _get_graph_embedder():
-    global _embedder
-    if _embedder is None:
-        _embedder = _SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedder
 
 EMOTION_COLORS: dict[str, str] = {
     "fear":        "#C0392B",
@@ -104,14 +93,6 @@ def _vector_cosine_similarity(left: list[float], right: list[float]) -> float:
     return dot / (norm_left * norm_right) if norm_left and norm_right else 0.0
 
 
-def _should_link_cloud_keywords(left: str, right: str, score: float) -> bool:
-    if score >= settings.GRAPH_CLOUD_STRICT_SIMILARITY_THRESHOLD:
-        return True
-    if score < settings.GRAPH_CLOUD_SIMILARITY_THRESHOLD:
-        return False
-    return _has_meaningful_keyword_overlap(left, right)
-
-
 def build_graph_data(db: Client, user_id: str) -> dict:
     """Build dream graph data supporting both keyword and emotion clustering."""
     dreams_response = (
@@ -119,7 +100,8 @@ def build_graph_data(db: Client, user_id: str) -> dict:
         .select("id,title,created_at,emotions")
         .execute()
     )
-    dreams = dreams_response.data or []
+    # Titles are stored encrypted; decrypt so graph labels/tooltips show real text.
+    dreams = [decrypt_dream_row(d) for d in (dreams_response.data or [])]
     dream_ids = [d["id"] for d in dreams if d.get("id")]
 
     if not dream_ids:
@@ -230,30 +212,18 @@ def build_graph_data(db: Client, user_id: str) -> dict:
         keyword_links.append({"source": f"dream-{did}", "target": knode_id, "type": "dream_keyword"})
 
     if len(keyword_node_names) >= 2:
-        if settings.USE_LOCAL_MODELS:
-            embedder = _get_graph_embedder()
-            embeddings = embedder.encode(keyword_node_names)
-            sim = _cosine_similarity(embeddings)
-            for i, src in enumerate(keyword_node_names):
-                for j in range(i + 1, len(keyword_node_names)):
-                    if src == keyword_node_names[j]:
-                        continue
-                    if sim[i][j] < settings.GRAPH_LOCAL_SIMILARITY_THRESHOLD:
-                        continue
-                    keyword_links.append({"source": src, "target": keyword_node_names[j], "type": "similar"})
-        else:
-            from app.services.ai_service import generate_embedding
-            embs = [generate_embedding(name) for name in keyword_node_names]
-            for i, src in enumerate(keyword_node_names):
-                for j in range(i + 1, len(keyword_node_names)):
-                    dst = keyword_node_names[j]
-                    if src == dst:
-                        continue
-                    a, b = embs[i], embs[j]
-                    cos_sim = _vector_cosine_similarity(a, b)
-                    if not _should_link_cloud_keywords(src, dst, cos_sim):
-                        continue
-                    keyword_links.append({"source": src, "target": dst, "type": "similar"})
+        # MiniLM everywhere (local and Render), one batched pass, no API calls.
+        from app.services.embeddings import embed_texts
+
+        embs = embed_texts(keyword_node_names)
+        for i, src in enumerate(keyword_node_names):
+            for j in range(i + 1, len(keyword_node_names)):
+                dst = keyword_node_names[j]
+                if src == dst:
+                    continue
+                if _vector_cosine_similarity(embs[i], embs[j]) < settings.GRAPH_LOCAL_SIMILARITY_THRESHOLD:
+                    continue
+                keyword_links.append({"source": src, "target": dst, "type": "similar"})
 
     # --- emotion links ---
     emotion_links = []

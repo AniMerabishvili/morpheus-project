@@ -1,9 +1,10 @@
+import json
 import logging
 import os
 import tempfile
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
@@ -14,22 +15,39 @@ from app.config import settings
 from app.crypto import decrypt_dream_row, encrypt_field
 from app.database import supabase_admin_only
 from app.security import client_safe_error, enforce_processing_rate_limit
+from app.services.library import book_label, clean_book_ids
 from app.services.ai_service import (
     anonymize_text,
     extract_entities,
     generate_analysis,
     generate_embedding,
-    get_rag_context,
+    format_passages,
+    no_match_message,
+    passage_sources,
+    retrieve_passages,
     get_user_history,
     transcribe_audio,
+    transcribe_audio_auto,
 )
 
 router = APIRouter(prefix="/dreams", tags=["dreams"])
 logger = logging.getLogger(__name__)
 
 
+def parse_book_ids(raw) -> list[str]:
+    """Accept a JSON list (or comma list) of library book ids and keep only real ones."""
+    if isinstance(raw, str):
+        raw = raw.strip()
+        try:
+            raw = json.loads(raw) if raw.startswith("[") else [p.strip() for p in raw.split(",")]
+        except json.JSONDecodeError:
+            raw = []
+    return clean_book_ids(raw)
+
+
 class TextDreamRequest(BaseModel):
     dream_text: str = Field(min_length=1, max_length=settings.MAX_DREAM_TEXT_CHARS)
+    books: list[str] = Field(default_factory=list, max_length=100)
 
 
 @router.get("")
@@ -194,7 +212,7 @@ def update_dream_analysis(db: Client, dream_id: str, analysis: str) -> None:
     )
 
 
-def process_text_pipeline(dream_text: str, current_user) -> dict:
+def process_text_pipeline(dream_text: str, current_user, books: Optional[list[str]] = None) -> dict:
     """Run the shared non-audio dream pipeline for English or Georgian text."""
     if not dream_text.strip():
         raise HTTPException(status_code=400, detail="dream_text cannot be empty.")
@@ -212,8 +230,17 @@ def process_text_pipeline(dream_text: str, current_user) -> dict:
     user_history = get_user_history(current_user.supabase, current_user.id)
 
     # 4. Retrieve RAG context and generate language-matched analysis
-    rag_context = get_rag_context(current_user.supabase, anonymized_text)
-    analysis = generate_analysis(anonymized_text, entities, rag_context, user_history)
+    books = books or []
+    book_labels = [book_label(b) for b in books]
+    passages = retrieve_passages(current_user.supabase, anonymized_text, entities, books)
+    if passages:
+        analysis = generate_analysis(
+            anonymized_text, entities, format_passages(passages), user_history, book_labels
+        )
+    else:
+        # Nothing in the library clears the similarity threshold: don't interpret without a source.
+        analysis = no_match_message(anonymized_text, books_chosen=bool(books))
+    sources = passage_sources(passages)
 
     # 5. Update saved dream with final analysis
     update_dream_analysis(current_user.supabase, dream_id, analysis)
@@ -225,6 +252,9 @@ def process_text_pipeline(dream_text: str, current_user) -> dict:
         "symbols": entities.get("symbols", []),
         "emotions": entities.get("emotions", []),
         "analysis": analysis,
+        "books": book_labels,
+        "sources": sources,
+        "grounded": bool(passages),
         "status": "completed",
     }
 
@@ -232,6 +262,7 @@ def process_text_pipeline(dream_text: str, current_user) -> dict:
 @router.post("/process")
 async def process_dream(
     audio: UploadFile = File(...),
+    books: str = Form(""),
     current_user=Depends(get_current_user),
 ) -> JSONResponse:
     """Full dream-processing pipeline:
@@ -266,21 +297,77 @@ async def process_dream(
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 
-        # 1. Transcribe audio → English text
-        transcription_result = transcribe_audio(tmp_path)
+        # 1. Auto-detect language and transcribe accordingly
+        transcription_result = transcribe_audio_auto(tmp_path)
         tmp_path = None  # ai_service cleans up the file in its finally block
 
-        english_text = transcription_result["english_text"]
+        dream_text = transcription_result["text"]
 
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(english_text, current_user),
+            content=process_text_pipeline(dream_text, current_user, parse_book_ids(books)),
         )
 
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Dream processing failed for user %s", current_user.id)
+        raise client_safe_error("Dream processing failed.") from exc
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@router.post("/process-ka")
+async def process_dream_georgian(
+    audio: UploadFile = File(...),
+    books: str = Form(""),
+    current_user=Depends(get_current_user),
+) -> JSONResponse:
+    """Georgian audio pipeline:
+    upload Georgian audio → transcribe to Georgian text (nemo) → existing dream pipeline.
+
+    The Georgian text is passed directly to process_text_pipeline(), identical to
+    how a user would type their dream in Georgian via /dreams/process-text.
+    Requires GEORGIAN_MODEL_PATH to be set in .env.
+    """
+    from app.services.ai_service import _transcribe_georgian_nemo
+
+    if not settings.GEORGIAN_MODEL_PATH:
+        raise HTTPException(
+            status_code=503,
+            detail="Georgian STT model is not configured on this server.",
+        )
+
+    suffix = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
+    tmp_path: Optional[str] = None
+    try:
+        enforce_processing_rate_limit(current_user.id)
+        audio_bytes = await audio.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        if len(audio_bytes) > settings.MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Uploaded file is too large.",
+            )
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        result = _transcribe_georgian_nemo(tmp_path)
+        tmp_path = None  # nemo helper cleans up in its finally block
+
+        return JSONResponse(
+            status_code=200,
+            content=process_text_pipeline(result["georgian_text"], current_user, parse_book_ids(books)),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Georgian dream processing failed for user %s", current_user.id)
         raise client_safe_error("Dream processing failed.") from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -297,7 +384,7 @@ async def process_dream_text(
         enforce_processing_rate_limit(current_user.id)
         return JSONResponse(
             status_code=200,
-            content=process_text_pipeline(payload.dream_text, current_user),
+            content=process_text_pipeline(payload.dream_text, current_user, parse_book_ids(payload.books)),
         )
     except HTTPException:
         raise

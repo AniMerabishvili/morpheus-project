@@ -15,7 +15,7 @@ _log.info("Config loaded. USE_LOCAL_MODELS=%s", settings.USE_LOCAL_MODELS)
 from app.security import RequestSizeLimitMiddleware
 
 _log.info("Loading routers...")
-from app.routers import dreams, graph
+from app.routers import dreams, graph, library
 _log.info("Routers loaded.")
 
 app = FastAPI(
@@ -40,6 +40,7 @@ app.add_middleware(
 
 app.include_router(dreams.router, prefix="/v1")
 app.include_router(graph.router, prefix="/v1", tags=["graph"])
+app.include_router(library.router, prefix="/v1")
 
 
 @app.exception_handler(RequestValidationError)

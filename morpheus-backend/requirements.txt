@@ -5,7 +5,10 @@ pydantic-settings>=2.0.0,<3.0.0
 supabase>=2.0.0,<3.0.0
 google-genai>=1.0.0,<2.0.0
 groq>=0.9.0
+anthropic>=2.0.0,<3.0.0
 cryptography>=42.0.0
 python-multipart>=0.0.9
 tenacity>=8.0.0
 names-dataset>=3.0.0,<4.0.0
+# all-MiniLM-L6-v2 embeddings via ONNX (no PyTorch) — must match the book library model
+fastembed>=0.9.0,<1.0.0

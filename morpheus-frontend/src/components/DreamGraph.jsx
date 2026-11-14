@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { apiFetch } from '../lib/api.js'
+import SaveToNotes from './SaveToNotes.jsx'
 
 const DEFAULT_DREAM_COLOR = '#FFDE6E'
 const DEFAULT_EMOTION_COLOR = '#95A5A6'
@@ -10,6 +11,11 @@ const VIEW_MODES = [
   { id: 'emotions', label: 'Emotions' },
   { id: 'combined', label: 'Combined' },
 ]
+
+// force-graph renders tooltips as HTML, so user text (dream titles) must be escaped.
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
+}
 
 function getNodeId(value) {
   if (!value) return ''
@@ -205,15 +211,26 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
   const visibleNodeCount = graphData.nodes.length
   const visibleDreamCount = graphData.nodes.filter((n) => n.type === 'dream').length
   const visibleSymbolCount = graphData.nodes.filter((n) => n.type === 'keyword').length
+  const visibleEmotionCount = graphData.nodes.filter((n) => n.type === 'emotion').length
 
   useEffect(() => {
     onStatsChange?.({
       nodes: visibleNodeCount,
       dreams: visibleDreamCount,
       symbols: visibleSymbolCount,
+      emotions: visibleEmotionCount,
       links: graphData.links.length,
+      view: viewMode,
     })
-  }, [graphData.links.length, onStatsChange, visibleDreamCount, visibleNodeCount, visibleSymbolCount])
+  }, [
+    graphData.links.length,
+    onStatsChange,
+    viewMode,
+    visibleDreamCount,
+    visibleEmotionCount,
+    visibleNodeCount,
+    visibleSymbolCount,
+  ])
 
   const activeSelectedNode = selectedNode
     ? graphData.nodes.find((node) => node.id === selectedNode.id) || selectedNode
@@ -240,34 +257,50 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
       .filter(Boolean)
   }, [graphData.links, graphData.nodes, selectedNode])
 
-  // Legend: unique (emotion, color) pairs present in the current graph.
+  // Legend: emotions in the current graph, most frequent first.
   const emotionLegend = useMemo(() => {
-    const seen = new Map()
     if (viewMode === 'keywords') return []
+    const entries = new Map() // label → { color, count }
+    const bump = (label, color, count) => {
+      const key = String(label).trim()
+      if (!key) return
+      const prev = entries.get(key)
+      entries.set(key, { color: prev?.color || color, count: (prev?.count || 0) + count })
+    }
 
     graphData.nodes.forEach((n) => {
       if (n?.type === 'emotion' && n.label) {
-        seen.set(n.label, n.color || DEFAULT_EMOTION_COLOR)
-      } else if (n?.type === 'dream' && n.dominant_emotion && n.color !== DEFAULT_DREAM_COLOR) {
-        if (!seen.has(n.dominant_emotion)) seen.set(n.dominant_emotion, n.color)
+        bump(n.label, n.color || DEFAULT_EMOTION_COLOR, n.dream_count || 0)
       }
     })
-    return [...seen.entries()]
+    // Dreams only add their dominant emotion when no emotion node already counts it.
+    graphData.nodes.forEach((n) => {
+      if (n?.type === 'dream' && n.dominant_emotion && n.color !== DEFAULT_DREAM_COLOR) {
+        const hasNode = graphData.nodes.some((e) => e?.type === 'emotion' && e.label === n.dominant_emotion)
+        if (!hasNode) bump(n.dominant_emotion, n.color, 1)
+      }
+    })
+
+    return [...entries.entries()]
+      .map(([label, { color, count }]) => ({ label, color, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
   }, [graphData.nodes, viewMode])
 
   return (
     <div className="flex h-full w-full flex-col bg-[#0f0f0f]">
-      <div className="shrink-0 px-5 pb-3 pt-20">
-        <div className="flex items-center gap-5">
+      <div className="shrink-0 px-4 pb-3 pt-[4.75rem] md:px-5">
+        <div className="inline-flex items-center gap-0.5 rounded-full border border-[#1f1f1f] bg-[#121212] p-1" role="tablist" aria-label="Graph view">
           {VIEW_MODES.map((mode) => (
             <button
               key={mode.id}
               type="button"
+              role="tab"
+              aria-selected={viewMode === mode.id}
               onClick={() => setViewMode(mode.id)}
-              className={`text-xs font-bold text-white transition-opacity ${
+              className={`rounded-full px-3.5 py-1.5 text-[12px] font-medium transition ${
                 viewMode === mode.id
-                  ? 'opacity-100'
-                  : 'opacity-40 hover:opacity-60'
+                  ? 'bg-[#FFDE6E]/[0.12] text-[#FFDE6E]'
+                  : 'text-[#E6DFA9]/55 hover:text-[#E6DFA9]'
               }`}
             >
               {mode.label}
@@ -293,21 +326,25 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
         </div>
       ) : null}
 
-      {/* Emotion color legend */}
+      {/* Emotion legend — most frequent first */}
       {!isLoading && !errorMessage && emotionLegend.length > 0 ? (
-        <div className="absolute left-4 right-4 top-2 z-20 flex gap-1.5 overflow-x-auto py-1 md:top-4 md:right-auto md:max-h-[min(42vh,22rem)] md:min-w-52 md:flex-col md:gap-1.5 md:overflow-x-hidden md:overflow-y-auto md:rounded-lg md:border md:border-[#1f1f1f] md:bg-[#141414]/90 md:p-3 md:backdrop-blur-md">
-          <p className="hidden flex-shrink-0 px-1 text-[10px] font-black uppercase tracking-widest text-[#8A7129] md:mb-1 md:block md:px-0">
-            Emotions
-          </p>
-          {emotionLegend.map(([label, color]) => (
-            <div key={label} className="flex flex-shrink-0 items-center gap-1.5 rounded-full border border-[#1f1f1f] bg-[#141414]/80 px-2 py-1 backdrop-blur-md md:gap-2 md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-0 md:backdrop-blur-0">
-              <span
-                className="h-2 w-2 flex-shrink-0 rounded-full md:h-2.5 md:w-2.5"
-                style={{ background: color }}
-              />
-              <span className="text-[10px] font-bold capitalize text-[#E6DFA9] md:text-xs">{label}</span>
-            </div>
-          ))}
+        <div className="no-scrollbar absolute left-4 right-4 top-2 z-20 flex gap-1.5 overflow-x-auto py-1 md:top-4 md:right-auto md:w-56 md:flex-col md:gap-0 md:overflow-visible md:rounded-xl md:border md:border-[#1f1f1f] md:bg-[#121212]/85 md:p-0 md:py-0 md:backdrop-blur-md">
+          <div className="hidden items-baseline justify-between px-4 pb-2 pt-3.5 md:flex">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8A7129]">Emotions</p>
+            <p className="text-[10px] text-[#5f5a44]">by frequency</p>
+          </div>
+          <ul className="no-scrollbar contents md:block md:max-h-[min(40vh,20rem)] md:overflow-y-auto md:px-2 md:pb-3 md:[mask-image:linear-gradient(to_bottom,black_85%,transparent)]">
+            {emotionLegend.map(({ label, color, count }) => (
+              <li
+                key={label}
+                className="flex flex-shrink-0 items-center gap-1.5 rounded-full border border-[#1f1f1f] bg-[#141414]/80 px-2.5 py-1 backdrop-blur-md md:gap-2.5 md:rounded-lg md:border-0 md:bg-transparent md:px-2 md:py-1.5 md:backdrop-blur-0 md:hover:bg-white/[0.03]"
+              >
+                <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />
+                <span className="truncate text-[11px] capitalize text-[#E6DFA9] md:flex-1 md:text-[13px]">{label}</span>
+                <span className="text-[10px] tabular-nums text-[#8A7129] md:text-xs">{count}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 
@@ -319,7 +356,7 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
           height={dimensions.height}
           backgroundColor="#0f0f0f"
           nodeColor={(node) => node?.color || DEFAULT_DREAM_COLOR}
-          nodeLabel={(node) => node?.label || ''}
+          nodeLabel={(node) => escapeHtml(node?.label || '')}
           nodeVal={(node) => {
             if (node?.type === 'dream') return 9
             return 5 + Math.min(node?.cluster_dream_count || 0, 12) * 1.2
@@ -371,96 +408,101 @@ function DreamGraph({ onPanelOpenChange, onStatsChange }) {
 
       {/* Side panel */}
       <aside
-        className={`fixed bottom-16 left-0 right-0 z-40 h-[72dvh] transform rounded-t-2xl border-t border-[#1f1f1f] bg-[#141414] p-5 shadow-2xl transition-transform duration-300 sm:p-6 md:bottom-0 md:left-auto md:top-[73px] md:h-auto md:w-[min(34rem,34vw)] md:rounded-none md:border-l md:border-t-0 ${
+        className={`fixed bottom-16 left-0 right-0 z-40 h-[72dvh] transform rounded-t-2xl border-t border-white/[0.06] bg-[#121212]/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 md:bottom-0 md:left-auto md:top-[57px] md:h-auto md:w-[min(30rem,34vw)] md:rounded-none md:border-l md:border-t-0 ${
           selectedDream ? 'translate-y-0 md:translate-x-0' : 'translate-y-[calc(100%+4rem)] md:translate-x-full md:translate-y-0'
         }`}
       >
         {selectedDream ? (
-          <div className="flex h-full flex-col gap-5 overflow-y-auto">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-2xl font-semibold leading-tight text-[#FFDE6E] sm:text-3xl">
-                  {selectedDream.title || activeSelectedNode?.label || 'Untitled Dream'}
-                </h2>
-                <p className="mt-2 text-sm font-bold text-[#8A7129]">
+          <div className="no-scrollbar flex h-full flex-col overflow-y-auto">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-white/[0.05] bg-[#121212]/95 px-6 pb-4 pt-5 backdrop-blur-xl">
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[#8A7129]">
                   {formatDate(selectedDream.created_at || activeSelectedNode?.created_at)}
                 </p>
+                <h2 className="mt-1.5 text-xl font-semibold leading-snug tracking-[-0.01em] text-[#FFDE6E] [overflow-wrap:anywhere]">
+                  {selectedDream.title || activeSelectedNode?.label || 'Untitled Dream'}
+                </h2>
+                {activeSelectedNode?.dominant_emotion ? (
+                  <p className="mt-2 flex items-center gap-2 text-[13px] capitalize text-[#E6DFA9]/80">
+                    <span
+                      className="h-2 w-2 flex-shrink-0 rounded-full"
+                      style={{ background: activeSelectedNode?.color || DEFAULT_DREAM_COLOR }}
+                    />
+                    {activeSelectedNode?.dominant_emotion}
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedNode(null)}
-                className="rounded-lg px-3 py-1 text-3xl leading-none text-[#E6DFA9] transition hover:text-[#FFDE6E] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFDE6E]"
+                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-lg leading-none text-[#9b9164] transition hover:bg-white/[0.05] hover:text-[#FFDE6E]"
                 aria-label="Close dream panel"
               >
                 ×
               </button>
             </div>
 
-            {/* Dominant emotion badge */}
-            {activeSelectedNode?.dominant_emotion ? (
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-3 w-3 flex-shrink-0 rounded-full"
-                  style={{ background: activeSelectedNode?.color || DEFAULT_DREAM_COLOR }}
-                />
-                <span className="text-sm font-bold capitalize text-[#E6DFA9]">
-                  {activeSelectedNode?.dominant_emotion}
-                </span>
-              </div>
-            ) : null}
+            <div className="flex flex-col gap-7 px-6 pb-8 pt-5">
+              {selectedDream.raw_text ? (
+                <section>
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#8A7129]">Your dream</p>
+                  <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#E6DFA9]/90 [overflow-wrap:anywhere]">
+                    {selectedDream.raw_text}
+                  </p>
+                </section>
+              ) : null}
 
-            {selectedDream.raw_text ? (
-              <div>
-                <p className="mb-2 text-sm font-bold text-[#8A7129]">Your dream</p>
-                <p className="whitespace-pre-wrap text-base leading-7 text-[#E6DFA9]">
-                  {selectedDream.raw_text}
+              <section>
+                <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#8A7129]">Interpretation</p>
+                <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#E6DFA9] [overflow-wrap:anywhere]">
+                  {selectedDream.analysis || 'No analysis available yet.'}
                 </p>
-              </div>
-            ) : null}
+              </section>
 
-            <div>
-              <p className="mb-2 text-sm font-bold text-[#8A7129]">Analysis</p>
-              <p className="whitespace-pre-wrap text-base leading-8 text-[#E6DFA9]">
-                {selectedDream.analysis || 'No analysis available yet.'}
-              </p>
-            </div>
-
-            {selectedSymbols.length ? (
-              <div>
-                <p className="mb-3 font-bold text-[#FFDE6E]">Symbols</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedSymbols.map((s) => (
-                    <span
-                      key={s}
-                      className="rounded-full bg-[#8A7129] px-3 py-1 text-sm font-bold text-[#E6DFA9]"
-                    >
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {Array.isArray(selectedDream.emotions) && selectedDream.emotions.length > 0 ? (
-              <div>
-                <p className="mb-3 font-bold text-[#FFDE6E]">Emotions</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedDream.emotions.map((em) => {
-                    const key = em.trim().toLowerCase()
-                    const color = rawData.emotion_colors[key] || DEFAULT_EMOTION_COLOR
-                    return (
+              {selectedSymbols.length ? (
+                <section>
+                  <p className="mb-2.5 text-[11px] uppercase tracking-[0.18em] text-[#8A7129]">Symbols</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedSymbols.map((s) => (
                       <span
-                        key={em}
-                        className="rounded-full px-3 py-1 text-sm font-bold text-[#0f0f0f]"
-                        style={{ background: color }}
+                        key={s}
+                        className="rounded-full border border-[#8A7129]/40 bg-[#8A7129]/15 px-2.5 py-1 text-xs text-[#E6DFA9]"
                       >
-                        {em}
+                        {s}
                       </span>
-                    )
-                  })}
-                </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {Array.isArray(selectedDream.emotions) && selectedDream.emotions.length > 0 ? (
+                <section>
+                  <p className="mb-2.5 text-[11px] uppercase tracking-[0.18em] text-[#8A7129]">Emotions</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedDream.emotions.map((em) => {
+                      const key = em.trim().toLowerCase()
+                      const color = rawData.emotion_colors[key] || DEFAULT_EMOTION_COLOR
+                      return (
+                        <span
+                          key={em}
+                          className="flex items-center gap-1.5 rounded-full border border-white/[0.07] px-2.5 py-1 text-xs capitalize text-[#E6DFA9]"
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+                          {em}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
+              <div>
+                <SaveToNotes
+                  dream={{ ...selectedDream, symbols: selectedSymbols }}
+                  align="left"
+                />
               </div>
-            ) : null}
+            </div>
           </div>
         ) : null}
       </aside>

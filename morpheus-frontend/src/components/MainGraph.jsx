@@ -15,28 +15,32 @@ function MainGraph({ onStatsChange, stats }) {
         />
       </div>
 
-      {/* Stats + legend panel */}
+      {/* Stats + legend */}
       <div
-        className={`absolute bottom-20 left-3 right-24 z-30 rounded-lg border border-[#1f1f1f] bg-[#0f0f0f]/80 p-2 backdrop-blur-md transition-opacity duration-200 md:bottom-5 md:left-5 md:right-auto md:rounded-xl md:p-4 ${
+        className={`absolute bottom-20 left-3 right-24 z-30 rounded-xl border border-[#1f1f1f] bg-[#121212]/85 px-3 py-2.5 backdrop-blur-md transition-opacity duration-200 md:bottom-5 md:left-5 md:right-auto md:px-4 md:py-3 ${
           isDreamPanelOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'
         }`}
       >
-        <p className="mb-2 truncate text-[10px] font-bold leading-4 text-[#8A7129] md:mb-4 md:text-xs md:leading-5">
-          {graphStats.nodes} nodes · {graphStats.dreams} dreams · {graphStats.symbols} symbols ·{' '}
-          {graphStats.links} links
-        </p>
-        <p className="mb-2 hidden text-[10px] font-black uppercase tracking-[0.18em] text-[#8A7129] md:mb-3 md:block md:text-sm">
-          Legend
-        </p>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-[#E6DFA9] md:block md:space-y-2 md:text-sm">
-          <div className="flex items-center gap-1.5 md:gap-3">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#FFDE6E] md:h-3 md:w-3" />
-            <span>Dream</span>
-          </div>
-          <div className="flex items-center gap-1.5 md:gap-3">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#8A7129] md:h-3 md:w-3" />
-            <span>Symbol</span>
-          </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-[#E6DFA9]/80 md:text-xs">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-[#FFDE6E]" />
+            Dreams <span className="tabular-nums text-[#8A7129]">{graphStats.dreams}</span>
+          </span>
+          {graphStats.view !== 'emotions' ? (
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-[#8A7129]" />
+              Symbols <span className="tabular-nums text-[#8A7129]">{graphStats.symbols}</span>
+            </span>
+          ) : null}
+          {graphStats.view !== 'keywords' ? (
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-[#95A5A6]" />
+              Emotions <span className="tabular-nums text-[#8A7129]">{graphStats.emotions || 0}</span>
+            </span>
+          ) : null}
+          <span className="hidden text-[#5f5a44] sm:inline">
+            {graphStats.nodes} nodes · {graphStats.links} links
+          </span>
         </div>
       </div>
     </main>
